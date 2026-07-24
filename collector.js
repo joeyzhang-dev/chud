@@ -157,6 +157,13 @@ class Collector {
     const s = this.sessions.get(key);
     if (!s) return 'unknown session';
 
+    // Copilot "autopilot" sessions live in the GitHub Copilot desktop app,
+    // never in a terminal — go straight there.
+    if (s.source === 'copilot' && s.client === 'github/autopilot') {
+      await run('open', ['-b', 'com.github.githubapp']);
+      return 'activated GitHub Copilot app';
+    }
+
     // Locate the surface in cmux's CURRENT tree (handles moved tabs/workspaces).
     const surfaces = await this.cmuxSurfaces();
     let target = null;
@@ -180,6 +187,12 @@ class Collector {
     if (s.focus?.bundle) {
       await run('open', ['-b', s.focus.bundle]);
       return 'activated app ' + s.focus.bundle;
+    }
+    if (s.source === 'copilot') {
+      // Copilot session with no matching cmux terminal -> it lives in the
+      // GitHub Copilot desktop app (no session deep-links exist yet).
+      await run('open', ['-b', 'com.github.githubapp']);
+      return 'activated GitHub Copilot app';
     }
     await run('open', ['-b', 'com.cmuxterm.app']);
     return 'activated cmux (no precise match)';
@@ -331,12 +344,15 @@ class Collector {
         const lastActivity = Date.parse(r.updated_at + 'Z') || Date.parse(r.updated_at) || Date.now();
         const existing = this.sessions.get(key);
         if (existing && existing.lastActivity === lastActivity) continue;
+        const meta = copilotSessionMeta(r.id);
         this.upsert(key, {
           source: 'copilot',
           sessionId: r.id,
           cwd: r.cwd,
           branch: r.branch,
           summary: clean(r.summary),
+          title: meta.title,
+          client: meta.client,
           lastPrompt: cleanPrompt(r.last_user),
           lastReply: clean(r.last_assistant),
           lastActivity,
@@ -359,10 +375,22 @@ class Collector {
   }
 }
 
+// Chat title + client type live in the per-session workspace.yaml
+function copilotSessionMeta(id) {
+  try {
+    const y = fs.readFileSync(path.join(os.homedir(), '.copilot', 'session-state', id, 'workspace.yaml'), 'utf8');
+    return {
+      title: (y.match(/^name: (.+)$/m) || [])[1] || null,
+      client: (y.match(/^client_name: (.+)$/m) || [])[1] || null,
+    };
+  } catch { return {}; }
+}
+
 // Best-effort: match a session to a cmux surface by title/project name
 function matchSurfaceByTitle(surfaces, s) {
   if (!surfaces.length) return null;
   const needles = [];
+  if (s.title) needles.push(s.title.toLowerCase().slice(0, 50));
   if (s.summary) needles.push(s.summary.toLowerCase().slice(0, 40));
   if (s.lastPrompt) needles.push(s.lastPrompt.toLowerCase().slice(0, 40));
   for (const n of needles) {

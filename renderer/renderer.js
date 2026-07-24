@@ -49,7 +49,7 @@ function render() {
         <span class="time">${timeAgo(s.lastActivity)}</span>
       </div>
       <div class="status-line ${s.status}">${STATUS_LABEL[s.status] || s.status}${note}${branch}</div>
-      ${s.lastPrompt ? `<div class="prompt">${esc(s.lastPrompt)}</div>` : ''}
+      ${s.title || s.lastPrompt ? `<div class="prompt">${esc(s.title || s.lastPrompt)}</div>` : ''}
       ${s.lastReply && s.status !== 'working' ? `<div class="reply">${esc(s.lastReply)}</div>` : ''}
     </div>`;
   }).join('');
