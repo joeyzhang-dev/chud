@@ -39,6 +39,7 @@ app.whenReady().then(() => {
   collector.start();
 
   ipcMain.handle('get-state', () => collector.getState());
+  ipcMain.handle('focus-session', (_e, key) => collector.focusSession(key));
   ipcMain.on('close-window', () => win.close());
 });
 

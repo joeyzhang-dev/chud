@@ -5,6 +5,15 @@ const os = require('os');
 const { execFile } = require('child_process');
 
 const PORT = 4471;
+const CMUX_BIN = '/Applications/cmux.app/Contents/Resources/bin/cmux';
+
+function run(cmd, args) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout: 5000, env: { ...process.env, CMUX_QUIET: '1' } }, (err, stdout) => {
+      resolve(err ? null : stdout);
+    });
+  });
+}
 const CLAUDE_PROJECTS = path.join(os.homedir(), '.claude', 'projects');
 const COPILOT_DB = path.join(os.homedir(), '.copilot', 'session-store.db');
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -62,13 +71,24 @@ class Collector {
 
   startServer() {
     this.server = http.createServer((req, res) => {
-      if (req.method === 'POST' && req.url === '/event') {
+      if (req.method === 'POST' && (req.url === '/event' || req.url === '/env')) {
+        const isEnv = req.url === '/env';
         let body = '';
         req.on('data', (c) => { body += c; });
         req.on('end', () => {
-          try { this.handleHookEvent(JSON.parse(body)); } catch { /* ignore malformed */ }
+          try {
+            const data = JSON.parse(body);
+            if (isEnv) this.handleEnvInfo(data);
+            else this.handleHookEvent(data);
+          } catch { /* ignore malformed */ }
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end('{}');
+        });
+      } else if (req.method === 'GET' && req.url.startsWith('/focus')) {
+        const key = new URL(req.url, 'http://x').searchParams.get('key');
+        this.focusSession(key).then((result) => {
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end(result);
         });
       } else if (req.method === 'GET' && req.url.startsWith('/shot')) {
         const file = path.join(os.tmpdir(), 'session-hud-shot.png');
@@ -85,6 +105,76 @@ class Collector {
     });
     this.server.on('error', (e) => console.error('collector server error:', e.message));
     this.server.listen(PORT, '127.0.0.1');
+  }
+
+  handleEnvInfo(data) {
+    if (!data.session_id) return;
+    const key = `claude:${data.session_id}`;
+    const focus = {};
+    if (data.cmuxWorkspace) focus.cmuxWorkspace = data.cmuxWorkspace;
+    if (data.cmuxSurface) focus.cmuxSurface = data.cmuxSurface;
+    if (data.bundle) focus.bundle = data.bundle;
+    if (data.termProgram) focus.termProgram = data.termProgram;
+    const existing = this.sessions.get(key) || {};
+    this.sessions.set(key, { ...existing, key, focus: { ...existing.focus, ...focus } });
+  }
+
+  // Bring the terminal/app hosting this session to the front
+  async focusSession(key) {
+    const s = this.sessions.get(key);
+    if (!s) return 'unknown session';
+
+    // 1. Precise: cmux surface captured from the session's environment
+    if (s.focus?.cmuxSurface) {
+      await run(CMUX_BIN, ['focus-panel', '--panel', s.focus.cmuxSurface]);
+      await run('open', ['-b', 'com.cmuxterm.app']);
+      run(CMUX_BIN, ['trigger-flash', '--surface', s.focus.cmuxSurface]);
+      return 'focused cmux surface';
+    }
+
+    // 2. Best effort: find a cmux surface whose title matches this session
+    const surface = await this.findCmuxSurface(s);
+    if (surface) {
+      await run(CMUX_BIN, ['focus-panel', '--panel', surface]);
+      await run('open', ['-b', 'com.cmuxterm.app']);
+      run(CMUX_BIN, ['trigger-flash', '--surface', surface]);
+      return 'focused cmux surface (title match)';
+    }
+
+    // 3. Fallback: just activate the hosting app
+    if (s.focus?.bundle) {
+      await run('open', ['-b', s.focus.bundle]);
+      return 'activated app ' + s.focus.bundle;
+    }
+    await run('open', ['-b', 'com.cmuxterm.app']);
+    return 'activated cmux (no precise match)';
+  }
+
+  async findCmuxSurface(s) {
+    const out = await run(CMUX_BIN, ['tree', '--all', '--id-format', 'both']);
+    if (!out) return null;
+    // lines like: surface surface:5 (UUID) [terminal] "Title ..." tty=ttys001
+    const surfaces = [];
+    for (const line of out.split('\n')) {
+      const m = line.match(/surface surface:\d+\s+([0-9A-Fa-f-]{36})\s+\[terminal\]\s+"([^"]*)"/);
+      if (m) surfaces.push({ uuid: m[1], title: m[2].toLowerCase() });
+    }
+    if (!surfaces.length) return null;
+
+    const needles = [];
+    if (s.summary) needles.push(s.summary.toLowerCase().slice(0, 40));
+    if (s.lastPrompt) needles.push(s.lastPrompt.toLowerCase().slice(0, 40));
+    const proj = s.cwd ? s.cwd.split('/').filter(Boolean).pop().toLowerCase() : null;
+
+    for (const n of needles) {
+      const hit = surfaces.find((x) => n.length > 8 && x.title.includes(n));
+      if (hit) return hit.uuid;
+    }
+    if (proj) {
+      const hit = surfaces.find((x) => x.title.includes('/' + proj) || x.title.endsWith(proj));
+      if (hit) return hit.uuid;
+    }
+    return null;
   }
 
   handleHookEvent(ev) {

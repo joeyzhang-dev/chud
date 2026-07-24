@@ -41,7 +41,7 @@ function render() {
     const note = s.status === 'needs-input' && s.note ? ` · ${esc(s.note)}` : '';
     const branch = s.branch ? ` <span class="branch">⎇ ${esc(s.branch)}</span>` : '';
     return `
-    <div class="card ${s.status}">
+    <div class="card ${s.status}" data-key="${esc(s.key)}" title="Click to jump to this session">
       <div class="row">
         <span class="dot ${s.status}"></span>
         <span class="name">${esc(projectName(s))}</span>
@@ -58,4 +58,11 @@ function render() {
 window.hud.onState((s) => { state = s; render(); });
 window.hud.getState().then((s) => { state = s; render(); });
 document.getElementById('close').addEventListener('click', () => window.hud.close());
+document.getElementById('list').addEventListener('click', (e) => {
+  const card = e.target.closest('.card');
+  if (!card || !card.dataset.key) return;
+  card.classList.add('clicked');
+  setTimeout(() => card.classList.remove('clicked'), 400);
+  window.hud.focusSession(card.dataset.key);
+});
 setInterval(render, 15000);

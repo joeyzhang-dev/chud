@@ -53,6 +53,10 @@
     padding: 8px 10px;
     margin-bottom: 6px;
   }
+  .card { cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.1s; }
+  .card:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.18); }
+  .card:active { transform: scale(0.985); }
+  .card.clicked { border-color: rgba(96,165,250,0.7); }
   .card.needs-input { border-color: rgba(255,170,60,0.45); background: rgba(255,170,60,0.08); }
   .card.ended { opacity: 0.45; }
   .row { display: flex; align-items: center; gap: 6px; }
