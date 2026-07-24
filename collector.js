@@ -209,7 +209,7 @@ class Collector {
           cwd: r.cwd,
           branch: r.branch,
           summary: clean(r.summary),
-          lastPrompt: clean(r.last_user),
+          lastPrompt: cleanPrompt(r.last_user),
           lastReply: clean(r.last_assistant),
           lastActivity,
         });
@@ -269,6 +269,11 @@ function extractText(content) {
     return clean(parts.join(' '));
   }
   return null;
+}
+
+function cleanPrompt(s) {
+  const t = clean(s);
+  return t && t.startsWith('<') ? null : t;
 }
 
 function clean(s) {
