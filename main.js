@@ -7,7 +7,7 @@ const { Collector } = require('./collector');
 let win;
 let collector;
 
-const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', followDisplay: true };
+const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', toggleHotkey: 'Control+Shift+H', followDisplay: true };
 
 // Hop to whichever display the cursor is on, keeping the window's relative
 // position. Skipped while the HUD is focused so it never fights the user.
@@ -58,14 +58,29 @@ function returnFocus() {
   if (win && !win.isDestroyed()) win.webContents.send('nav-clear');
 }
 
-function registerHotkey(accelerator) {
-  globalShortcut.unregisterAll();
+// Hide/show without stealing focus, so peeking at what's underneath
+// doesn't interrupt whatever the user is typing elsewhere.
+function onToggleHotkey() {
+  if (!win || win.isDestroyed()) return;
+  if (win.isVisible()) win.hide();
+  else win.showInactive();
+}
+
+function tryRegister(accelerator, fn) {
   if (!accelerator) return true;
   try {
-    return globalShortcut.register(accelerator, onHotkey);
+    return globalShortcut.register(accelerator, fn);
   } catch {
     return false;
   }
+}
+
+function registerHotkeys() {
+  globalShortcut.unregisterAll();
+  return {
+    okFocus: tryRegister(settings.hotkey, onHotkey),
+    okToggle: tryRegister(settings.toggleHotkey, onToggleHotkey),
+  };
 }
 let settings = { ...DEFAULT_SETTINGS };
 let settingsFile;
@@ -85,15 +100,20 @@ function applySettings() {
 }
 
 function updateSettings(patch) {
-  const prevHotkey = settings.hotkey;
+  const prev = { hotkey: settings.hotkey, toggleHotkey: settings.toggleHotkey };
   settings = { ...settings, ...patch };
   delete settings.hotkeyError;
-  if ('hotkey' in patch && patch.hotkey !== prevHotkey) {
-    if (!registerHotkey(settings.hotkey)) {
-      settings.hotkey = prevHotkey;
+  if ('hotkey' in patch || 'toggleHotkey' in patch) {
+    const r = registerHotkeys();
+    if (!r.okFocus) {
+      settings.hotkey = prev.hotkey;
       settings.hotkeyError = `Could not register "${patch.hotkey}"`;
-      registerHotkey(prevHotkey);
     }
+    if (!r.okToggle) {
+      settings.toggleHotkey = prev.toggleHotkey;
+      settings.hotkeyError = `Could not register "${patch.toggleHotkey}"`;
+    }
+    if (!r.okFocus || !r.okToggle) registerHotkeys();
   }
   saveSettings();
   applySettings();
@@ -155,11 +175,13 @@ app.whenReady().then(() => {
   ipcMain.on('set-settings', (_e, patch) => updateSettings(patch));
   ipcMain.on('return-focus', () => returnFocus());
   ipcMain.on('suspend-hotkey', () => globalShortcut.unregisterAll());
-  ipcMain.on('resume-hotkey', () => registerHotkey(settings.hotkey));
+  ipcMain.on('resume-hotkey', () => registerHotkeys());
   ipcMain.on('close-window', () => win.close());
 
-  if (!registerHotkey(settings.hotkey)) {
-    settings.hotkeyError = `Could not register "${settings.hotkey}" (in use by another app?)`;
+  const r = registerHotkeys();
+  if (!r.okFocus || !r.okToggle) {
+    const bad = !r.okFocus ? settings.hotkey : settings.toggleHotkey;
+    settings.hotkeyError = `Could not register "${bad}" (in use by another app?)`;
   }
 });
 

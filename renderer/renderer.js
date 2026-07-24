@@ -68,10 +68,10 @@ function applySettingsUI(s) {
   $('compact').checked = !!s.compact;
   $('app').classList.toggle('compact', !!s.compact);
   $('follow').checked = !!s.followDisplay;
-  if (document.activeElement !== $('hotkey')) {
-    const sym = { Command: '⌘', Control: '⌃', Alt: '⌥', Shift: '⇧' };
-    $('hotkey').value = (s.hotkey || '').split('+').map((p) => sym[p] || p).join(' ');
-  }
+  const sym = { Command: '⌘', Control: '⌃', Alt: '⌥', Shift: '⇧' };
+  const pretty = (acc) => (acc || '').split('+').map((p) => sym[p] || p).join(' ');
+  if (document.activeElement !== $('hotkey')) $('hotkey').value = pretty(s.hotkey);
+  if (document.activeElement !== $('toggle-hotkey')) $('toggle-hotkey').value = pretty(s.toggleHotkey);
   const hint = $('hotkey-hint');
   if (s.hotkeyError) {
     hint.textContent = s.hotkeyError;
@@ -139,34 +139,38 @@ function prettyMods(e) {
   return parts.join('');
 }
 
-const hotkeyEl = $('hotkey');
-hotkeyEl.addEventListener('focus', () => {
-  window.hud.suspendHotkey();
-  hotkeyEl.value = 'Press shortcut…';
-  $('hotkey-hint').textContent = 'Press keys · Esc cancel · ⌫ clear hotkey';
-});
-hotkeyEl.addEventListener('blur', () => {
-  window.hud.resumeHotkey();
-  applySettingsUI(lastSettings);
-});
-hotkeyEl.addEventListener('keydown', (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  if (e.key === 'Escape') { hotkeyEl.blur(); return; }
-  if (e.key === 'Backspace' || e.key === 'Delete') {
-    window.hud.setSettings({ hotkey: '' });
-    hotkeyEl.blur();
-    return;
-  }
-  const acc = accFromEvent(e);
-  if (acc) {
-    window.hud.setSettings({ hotkey: acc });
-    hotkeyEl.blur();
-  } else {
-    const mods = prettyMods(e);
-    hotkeyEl.value = mods ? mods + '…' : 'Press shortcut…';
-  }
-});
+function setupRecorder(inputId, settingsKey) {
+  const el = $(inputId);
+  el.addEventListener('focus', () => {
+    window.hud.suspendHotkey();
+    el.value = 'Press shortcut…';
+    $('hotkey-hint').textContent = 'Press keys · Esc cancel · ⌫ clear hotkey';
+  });
+  el.addEventListener('blur', () => {
+    window.hud.resumeHotkey();
+    applySettingsUI(lastSettings);
+  });
+  el.addEventListener('keydown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { el.blur(); return; }
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      window.hud.setSettings({ [settingsKey]: '' });
+      el.blur();
+      return;
+    }
+    const acc = accFromEvent(e);
+    if (acc) {
+      window.hud.setSettings({ [settingsKey]: acc });
+      el.blur();
+    } else {
+      const mods = prettyMods(e);
+      el.value = mods ? mods + '…' : 'Press shortcut…';
+    }
+  });
+}
+setupRecorder('hotkey', 'hotkey');
+setupRecorder('toggle-hotkey', 'toggleHotkey');
 
 window.hud.onSettings(applySettingsUI);
 window.hud.getSettings().then(applySettingsUI);
