@@ -9,7 +9,13 @@ const CMUX_BIN = '/Applications/cmux.app/Contents/Resources/bin/cmux';
 
 function run(cmd, args) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 5000, env: { ...process.env, CMUX_QUIET: '1' } }, (err, stdout) => {
+    execFile(cmd, args, { timeout: 5000, env: { ...process.env, CMUX_QUIET: '1' } }, (err, stdout, stderr) => {
+      if (err) {
+        try {
+          fs.appendFileSync('/tmp/session-hud-run.log',
+            `${new Date().toISOString()} ${cmd} ${args.join(' ')}\nERR: ${err.message}\nSTDERR: ${stderr}\n\n`);
+        } catch { /* ignore */ }
+      }
       resolve(err ? null : stdout);
     });
   });
@@ -90,6 +96,11 @@ class Collector {
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end(result);
         });
+      } else if (req.method === 'GET' && req.url.startsWith('/surfaces')) {
+        this.cmuxSurfaces().then((s) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(s));
+        });
       } else if (req.method === 'GET' && req.url.startsWith('/settings')) {
         const q = new URL(req.url, 'http://x').searchParams;
         const patch = {};
@@ -133,24 +144,26 @@ class Collector {
     const s = this.sessions.get(key);
     if (!s) return 'unknown session';
 
-    // 1. Precise: cmux surface captured from the session's environment
+    // Locate the surface in cmux's CURRENT tree (handles moved tabs/workspaces).
+    const surfaces = await this.cmuxSurfaces();
+    let target = null;
     if (s.focus?.cmuxSurface) {
-      await run(CMUX_BIN, ['focus-panel', '--panel', s.focus.cmuxSurface]);
+      target = surfaces.find((x) => x.uuid === s.focus.cmuxSurface) || null;
+    }
+    if (!target) target = matchSurfaceByTitle(surfaces, s);
+
+    if (target) {
+      // Full navigation: window -> workspace -> pane/tab. focus-panel only
+      // searches the active workspace unless --workspace is passed explicitly.
+      if (target.windowUuid) await run(CMUX_BIN, ['focus-window', '--window', target.windowUuid]);
+      await run(CMUX_BIN, ['select-workspace', '--workspace', target.workspaceUuid]);
+      await run(CMUX_BIN, ['focus-panel', '--panel', target.uuid, '--workspace', target.workspaceUuid]);
       await run('open', ['-b', 'com.cmuxterm.app']);
-      run(CMUX_BIN, ['trigger-flash', '--surface', s.focus.cmuxSurface]);
+      run(CMUX_BIN, ['trigger-flash', '--surface', target.uuid, '--workspace', target.workspaceUuid]);
       return 'focused cmux surface';
     }
 
-    // 2. Best effort: find a cmux surface whose title matches this session
-    const surface = await this.findCmuxSurface(s);
-    if (surface) {
-      await run(CMUX_BIN, ['focus-panel', '--panel', surface]);
-      await run('open', ['-b', 'com.cmuxterm.app']);
-      run(CMUX_BIN, ['trigger-flash', '--surface', surface]);
-      return 'focused cmux surface (title match)';
-    }
-
-    // 3. Fallback: just activate the hosting app
+    // Fallback: just activate the hosting app
     if (s.focus?.bundle) {
       await run('open', ['-b', s.focus.bundle]);
       return 'activated app ' + s.focus.bundle;
@@ -159,31 +172,34 @@ class Collector {
     return 'activated cmux (no precise match)';
   }
 
-  async findCmuxSurface(s) {
+  // Parse `cmux tree --all` into a flat surface list with full context
+  async cmuxSurfaces() {
     const out = await run(CMUX_BIN, ['tree', '--all', '--id-format', 'both']);
-    if (!out) return null;
-    // lines like: surface surface:5 (UUID) [terminal] "Title ..." tty=ttys001
+    if (!out) return [];
+    const UUID = '([0-9A-Fa-f-]{36})';
     const surfaces = [];
+    let windowUuid = null;
+    let workspaceUuid = null;
+    let paneUuid = null;
     for (const line of out.split('\n')) {
-      const m = line.match(/surface surface:\d+\s+([0-9A-Fa-f-]{36})\s+\[terminal\]\s+"([^"]*)"/);
-      if (m) surfaces.push({ uuid: m[1], title: m[2].toLowerCase() });
+      let m;
+      if ((m = line.match(new RegExp(`window window:\\d+ ${UUID}`)))) {
+        windowUuid = m[1];
+      } else if ((m = line.match(new RegExp(`workspace workspace:\\d+ ${UUID}`)))) {
+        workspaceUuid = m[1];
+      } else if ((m = line.match(new RegExp(`pane pane:\\d+ ${UUID}`)))) {
+        paneUuid = m[1];
+      } else if ((m = line.match(new RegExp(`surface surface:\\d+ ${UUID} \\[terminal\\] "([^"]*)"`)))) {
+        surfaces.push({
+          uuid: m[1],
+          title: m[2].toLowerCase(),
+          windowUuid,
+          workspaceUuid,
+          paneUuid,
+        });
+      }
     }
-    if (!surfaces.length) return null;
-
-    const needles = [];
-    if (s.summary) needles.push(s.summary.toLowerCase().slice(0, 40));
-    if (s.lastPrompt) needles.push(s.lastPrompt.toLowerCase().slice(0, 40));
-    const proj = s.cwd ? s.cwd.split('/').filter(Boolean).pop().toLowerCase() : null;
-
-    for (const n of needles) {
-      const hit = surfaces.find((x) => n.length > 8 && x.title.includes(n));
-      if (hit) return hit.uuid;
-    }
-    if (proj) {
-      const hit = surfaces.find((x) => x.title.includes('/' + proj) || x.title.endsWith(proj));
-      if (hit) return hit.uuid;
-    }
-    return null;
+    return surfaces;
   }
 
   handleHookEvent(ev) {
@@ -328,6 +344,24 @@ class Collector {
     });
     run(['-readonly', '-json', COPILOT_DB, sql]);
   }
+}
+
+// Best-effort: match a session to a cmux surface by title/project name
+function matchSurfaceByTitle(surfaces, s) {
+  if (!surfaces.length) return null;
+  const needles = [];
+  if (s.summary) needles.push(s.summary.toLowerCase().slice(0, 40));
+  if (s.lastPrompt) needles.push(s.lastPrompt.toLowerCase().slice(0, 40));
+  for (const n of needles) {
+    const hit = surfaces.find((x) => n.length > 8 && x.title.includes(n));
+    if (hit) return hit;
+  }
+  const proj = s.cwd ? s.cwd.split('/').filter(Boolean).pop().toLowerCase() : null;
+  if (proj) {
+    const hit = surfaces.find((x) => x.title.includes('/' + proj) || x.title.endsWith(proj));
+    if (hit) return hit;
+  }
+  return null;
 }
 
 // ---------- transcript parsing helpers ----------
