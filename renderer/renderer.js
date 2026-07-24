@@ -53,6 +53,7 @@ function render() {
       ${s.lastReply && s.status !== 'working' ? `<div class="reply">${esc(s.lastReply)}</div>` : ''}
     </div>`;
   }).join('');
+  applySel();
 }
 
 // ---- settings ----
@@ -65,6 +66,15 @@ function applySettingsUI(s) {
   $('op-u-v').textContent = Math.round(s.unfocusedOpacity * 100) + '%';
   $('compact').checked = !!s.compact;
   $('app').classList.toggle('compact', !!s.compact);
+  if (document.activeElement !== $('hotkey')) $('hotkey').value = s.hotkey || '';
+  const hint = $('hotkey-hint');
+  if (s.hotkeyError) {
+    hint.textContent = s.hotkeyError;
+    hint.classList.add('error');
+  } else {
+    hint.textContent = 'Press hotkey from any app · ↑↓ navigate · Enter jump · Esc back';
+    hint.classList.remove('error');
+  }
 }
 
 $('gear').addEventListener('click', () => {
@@ -85,8 +95,51 @@ $('compact').addEventListener('change', (e) => {
   window.hud.setSettings({ compact: e.target.checked });
 });
 
+$('hotkey').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    window.hud.setSettings({ hotkey: e.target.value.trim() });
+    e.target.blur();
+  }
+  e.stopPropagation();
+});
+
 window.hud.onSettings(applySettingsUI);
 window.hud.getSettings().then(applySettingsUI);
+
+// ---- keyboard navigation (global hotkey flow) ----
+let sel = -1;
+
+function applySel() {
+  const cards = document.querySelectorAll('.card');
+  cards.forEach((c, i) => c.classList.toggle('selected', i === sel));
+  if (sel >= 0 && cards[sel]) cards[sel].scrollIntoView({ block: 'nearest' });
+}
+
+function moveSel(delta) {
+  const n = document.querySelectorAll('.card').length;
+  if (!n) return;
+  sel = sel < 0 ? 0 : Math.min(n - 1, Math.max(0, sel + delta));
+  applySel();
+}
+
+window.hud.onHotkeyFocus(() => { sel = 0; applySel(); });
+window.hud.onNavClear(() => { sel = -1; applySel(); });
+
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSel(1); }
+  else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSel(-1); }
+  else if (e.key === 'Enter' && sel >= 0) {
+    e.preventDefault();
+    const card = document.querySelectorAll('.card')[sel];
+    if (card?.dataset.key) window.hud.focusSession(card.dataset.key);
+    sel = -1; applySel();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    sel = -1; applySel();
+    window.hud.returnFocus();
+  }
+});
 
 window.hud.onState((s) => { state = s; render(); });
 window.hud.getState().then((s) => { state = s; render(); });

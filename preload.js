@@ -6,6 +6,9 @@ contextBridge.exposeInMainWorld('hud', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   setSettings: (patch) => ipcRenderer.send('set-settings', patch),
   onSettings: (cb) => ipcRenderer.on('settings', (_e, s) => cb(s)),
+  onHotkeyFocus: (cb) => ipcRenderer.on('hotkey-focus', () => cb()),
+  onNavClear: (cb) => ipcRenderer.on('nav-clear', () => cb()),
+  returnFocus: () => ipcRenderer.send('return-focus'),
   onState: (cb) => ipcRenderer.on('state', (_e, state) => cb(state)),
   close: () => ipcRenderer.send('close-window'),
 });
