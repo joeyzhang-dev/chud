@@ -90,6 +90,15 @@ class Collector {
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end(result);
         });
+      } else if (req.method === 'GET' && req.url.startsWith('/settings')) {
+        const q = new URL(req.url, 'http://x').searchParams;
+        const patch = {};
+        if (q.has('focused')) patch.focusedOpacity = parseFloat(q.get('focused'));
+        if (q.has('unfocused')) patch.unfocusedOpacity = parseFloat(q.get('unfocused'));
+        if (q.has('compact')) patch.compact = q.get('compact') === '1';
+        if (this.onSettingsDebug) this.onSettingsDebug(patch);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(patch));
       } else if (req.method === 'GET' && req.url.startsWith('/shot')) {
         const file = path.join(os.tmpdir(), 'session-hud-shot.png');
         if (this.onScreenshot) {

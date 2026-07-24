@@ -55,6 +55,39 @@ function render() {
   }).join('');
 }
 
+// ---- settings ----
+const $ = (id) => document.getElementById(id);
+
+function applySettingsUI(s) {
+  $('op-f').value = s.focusedOpacity;
+  $('op-u').value = s.unfocusedOpacity;
+  $('op-f-v').textContent = Math.round(s.focusedOpacity * 100) + '%';
+  $('op-u-v').textContent = Math.round(s.unfocusedOpacity * 100) + '%';
+  $('compact').checked = !!s.compact;
+  $('app').classList.toggle('compact', !!s.compact);
+}
+
+$('gear').addEventListener('click', () => {
+  $('settings').classList.toggle('hidden');
+  $('gear').classList.toggle('active');
+});
+$('op-f').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  $('op-f-v').textContent = Math.round(v * 100) + '%';
+  window.hud.setSettings({ focusedOpacity: v });
+});
+$('op-u').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  $('op-u-v').textContent = Math.round(v * 100) + '%';
+  window.hud.setSettings({ unfocusedOpacity: v });
+});
+$('compact').addEventListener('change', (e) => {
+  window.hud.setSettings({ compact: e.target.checked });
+});
+
+window.hud.onSettings(applySettingsUI);
+window.hud.getSettings().then(applySettingsUI);
+
 window.hud.onState((s) => { state = s; render(); });
 window.hud.getState().then((s) => { state = s; render(); });
 document.getElementById('close').addEventListener('click', () => window.hud.close());

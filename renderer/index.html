@@ -36,13 +36,39 @@
     padding: 2px 7px; border-radius: 8px;
   }
   header .spacer { flex: 1; }
-  header .close {
+  header .close, header .gear {
     -webkit-app-region: no-drag;
     cursor: pointer; color: #666; font-size: 13px;
     width: 20px; height: 20px; line-height: 20px; text-align: center;
     border-radius: 6px;
   }
   header .close:hover { background: rgba(255,80,80,0.2); color: #ff7070; }
+  header .gear:hover, header .gear.active { background: rgba(255,255,255,0.12); color: #d0d4e0; }
+  #settings {
+    flex-shrink: 0;
+    padding: 4px 14px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    margin-bottom: 6px;
+  }
+  #settings.hidden { display: none; }
+  #settings label {
+    display: flex; align-items: center; gap: 8px;
+    color: #9aa0b0; font-size: 11px; margin-top: 7px;
+  }
+  #settings label span.lbl { flex: 0 0 110px; }
+  #settings input[type=range] {
+    flex: 1; -webkit-appearance: none; height: 3px;
+    background: rgba(255,255,255,0.15); border-radius: 2px; outline: none;
+  }
+  #settings input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+    background: #8b93ab; cursor: pointer;
+  }
+  #settings input[type=range]::-webkit-slider-thumb:hover { background: #b7bcc9; }
+  #settings .val { flex: 0 0 34px; text-align: right; color: #7c8194; font-variant-numeric: tabular-nums; }
+  #settings input[type=checkbox] { accent-color: #60a5fa; }
+  #app.compact .prompt, #app.compact .reply { display: none; }
+  #app.compact .card { padding: 6px 10px; margin-bottom: 4px; }
   #list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
   #list::-webkit-scrollbar { width: 4px; }
   #list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
@@ -97,8 +123,14 @@
     <span class="title">⚡ Session HUD</span>
     <span class="count" id="count">0</span>
     <span class="spacer"></span>
+    <span class="gear" id="gear" title="Settings">⚙</span>
     <span class="close" id="close">✕</span>
   </header>
+  <div id="settings" class="hidden">
+    <label><span class="lbl">Opacity · focused</span><input type="range" id="op-f" min="0.2" max="1" step="0.05"><span class="val" id="op-f-v"></span></label>
+    <label><span class="lbl">Opacity · unfocused</span><input type="range" id="op-u" min="0.15" max="1" step="0.05"><span class="val" id="op-u-v"></span></label>
+    <label><input type="checkbox" id="compact"> Compact view</label>
+  </div>
   <div id="list"><div class="empty">Waiting for sessions…</div></div>
 </div>
 <script src="renderer.js"></script>

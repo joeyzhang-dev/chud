@@ -3,6 +3,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('hud', {
   getState: () => ipcRenderer.invoke('get-state'),
   focusSession: (key) => ipcRenderer.invoke('focus-session', key),
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  setSettings: (patch) => ipcRenderer.send('set-settings', patch),
+  onSettings: (cb) => ipcRenderer.on('settings', (_e, s) => cb(s)),
   onState: (cb) => ipcRenderer.on('state', (_e, state) => cb(state)),
   close: () => ipcRenderer.send('close-window'),
 });
