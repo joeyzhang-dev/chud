@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -7,7 +7,30 @@ const { Collector } = require('./collector');
 let win;
 let collector;
 
-const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space' };
+const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', followDisplay: true };
+
+// Hop to whichever display the cursor is on, keeping the window's relative
+// position. Skipped while the HUD is focused so it never fights the user.
+function followDisplayTick() {
+  if (!settings.followDisplay) return;
+  if (!win || win.isDestroyed() || win.isFocused()) return;
+  const cursor = screen.getCursorScreenPoint();
+  const target = screen.getDisplayNearestPoint(cursor);
+  const current = screen.getDisplayMatching(win.getBounds());
+  if (!target || !current || target.id === current.id) return;
+  const b = win.getBounds();
+  const cw = current.workArea;
+  const tw = target.workArea;
+  const clamp01 = (v) => Math.min(1, Math.max(0, v));
+  const fx = clamp01((b.x - cw.x) / Math.max(1, cw.width - b.width));
+  const fy = clamp01((b.y - cw.y) / Math.max(1, cw.height - b.height));
+  win.setBounds({
+    x: Math.round(tw.x + fx * Math.max(0, tw.width - b.width)),
+    y: Math.round(tw.y + fy * Math.max(0, tw.height - b.height)),
+    width: b.width,
+    height: b.height,
+  });
+}
 let prevAppBundle = null;
 
 function frontmostBundle() {
@@ -101,8 +124,19 @@ function createWindow() {
 
 app.whenReady().then(() => {
   settingsFile = path.join(app.getPath('userData'), 'hud-settings.json');
+  // Migrate settings from the pre-rename "session-hud" userData dir
+  if (!fs.existsSync(settingsFile)) {
+    const legacy = path.join(app.getPath('userData'), '..', 'session-hud', 'hud-settings.json');
+    try {
+      if (fs.existsSync(legacy)) {
+        fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+        fs.copyFileSync(legacy, settingsFile);
+      }
+    } catch { /* fresh start */ }
+  }
   loadSettings();
   createWindow();
+  setInterval(followDisplayTick, 1500);
 
   collector = new Collector((state) => {
     if (win && !win.isDestroyed()) win.webContents.send('state', state);

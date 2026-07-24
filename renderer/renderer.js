@@ -67,6 +67,7 @@ function applySettingsUI(s) {
   $('op-u-v').textContent = Math.round(s.unfocusedOpacity * 100) + '%';
   $('compact').checked = !!s.compact;
   $('app').classList.toggle('compact', !!s.compact);
+  $('follow').checked = !!s.followDisplay;
   if (document.activeElement !== $('hotkey')) {
     const sym = { Command: '⌘', Control: '⌃', Alt: '⌥', Shift: '⇧' };
     $('hotkey').value = (s.hotkey || '').split('+').map((p) => sym[p] || p).join(' ');
@@ -97,6 +98,9 @@ $('op-u').addEventListener('input', (e) => {
 });
 $('compact').addEventListener('change', (e) => {
   window.hud.setSettings({ compact: e.target.checked });
+});
+$('follow').addEventListener('change', (e) => {
+  window.hud.setSettings({ followDisplay: e.target.checked });
 });
 
 // ---- hotkey recorder: click the field, press the combo ----
