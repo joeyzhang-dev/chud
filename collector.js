@@ -7,9 +7,22 @@ const { execFile } = require('child_process');
 const PORT = 4471;
 const CMUX_BIN = '/Applications/cmux.app/Contents/Resources/bin/cmux';
 
+// cmux's socket only trusts descendants of the cmux app unless a socket
+// password is configured (automation.socketControlMode: "password").
+function cmuxPassword() {
+  try {
+    const cfg = fs.readFileSync(path.join(os.homedir(), '.config', 'cmux', 'cmux.json'), 'utf8');
+    const m = cfg.match(/"socketPassword"\s*:\s*"([^"]+)"/);
+    return m ? m[1] : null;
+  } catch { return null; }
+}
+
 function run(cmd, args) {
+  const env = { ...process.env, CMUX_QUIET: '1' };
+  const pw = cmuxPassword();
+  if (pw) env.CMUX_SOCKET_PASSWORD = pw;
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 5000, env: { ...process.env, CMUX_QUIET: '1' } }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout: 5000, env }, (err, stdout, stderr) => {
       if (err) {
         try {
           fs.appendFileSync('/tmp/session-hud-run.log',
