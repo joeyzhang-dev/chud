@@ -1,7 +1,7 @@
 {
-  "name": "session-hud",
+  "name": "chud",
   "version": "0.1.0",
-  "description": "Always-on-top live dashboard for Claude Code and Copilot CLI sessions",
+  "description": "chud — always-on-top live dashboard for Claude Code and Copilot sessions",
   "main": "main.js",
   "scripts": {
     "start": "electron ."
