@@ -1,0 +1,15 @@
+{
+  "name": "session-hud",
+  "version": "0.1.0",
+  "description": "Always-on-top live dashboard for Claude Code and Copilot CLI sessions",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}
