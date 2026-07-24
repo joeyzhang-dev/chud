@@ -120,6 +120,8 @@ app.whenReady().then(() => {
   ipcMain.handle('get-settings', () => settings);
   ipcMain.on('set-settings', (_e, patch) => updateSettings(patch));
   ipcMain.on('return-focus', () => returnFocus());
+  ipcMain.on('suspend-hotkey', () => globalShortcut.unregisterAll());
+  ipcMain.on('resume-hotkey', () => registerHotkey(settings.hotkey));
   ipcMain.on('close-window', () => win.close());
 
   if (!registerHotkey(settings.hotkey)) {

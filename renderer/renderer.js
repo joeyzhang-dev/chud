@@ -60,13 +60,17 @@ function render() {
 const $ = (id) => document.getElementById(id);
 
 function applySettingsUI(s) {
+  lastSettings = s;
   $('op-f').value = s.focusedOpacity;
   $('op-u').value = s.unfocusedOpacity;
   $('op-f-v').textContent = Math.round(s.focusedOpacity * 100) + '%';
   $('op-u-v').textContent = Math.round(s.unfocusedOpacity * 100) + '%';
   $('compact').checked = !!s.compact;
   $('app').classList.toggle('compact', !!s.compact);
-  if (document.activeElement !== $('hotkey')) $('hotkey').value = s.hotkey || '';
+  if (document.activeElement !== $('hotkey')) {
+    const sym = { Command: '⌘', Control: '⌃', Alt: '⌥', Shift: '⇧' };
+    $('hotkey').value = (s.hotkey || '').split('+').map((p) => sym[p] || p).join(' ');
+  }
   const hint = $('hotkey-hint');
   if (s.hotkeyError) {
     hint.textContent = s.hotkeyError;
@@ -95,12 +99,69 @@ $('compact').addEventListener('change', (e) => {
   window.hud.setSettings({ compact: e.target.checked });
 });
 
-$('hotkey').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    window.hud.setSettings({ hotkey: e.target.value.trim() });
-    e.target.blur();
+// ---- hotkey recorder: click the field, press the combo ----
+let lastSettings = {};
+
+function accFromEvent(e) {
+  const mods = [];
+  if (e.metaKey) mods.push('Command');
+  if (e.ctrlKey) mods.push('Control');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  const code = e.code;
+  let key = null;
+  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+  else if (/^Digit\d$/.test(code)) key = code.slice(5);
+  else if (/^F\d{1,2}$/.test(code)) key = code;
+  else if (code === 'Space') key = 'Space';
+  else if (code.startsWith('Arrow')) key = code.slice(5);
+  else if (code === 'Enter') key = 'Return';
+  else if (code === 'Tab') key = 'Tab';
+  else {
+    const punct = { Minus: '-', Equal: '=', Comma: ',', Period: '.', Slash: '/', Backquote: '`', Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Backslash: '\\' };
+    key = punct[code] || null;
   }
+  if (!key) return null;
+  if (!mods.length && !/^F\d/.test(key)) return null; // bare keys only allowed for F-keys
+  return [...mods, key].join('+');
+}
+
+function prettyMods(e) {
+  const parts = [];
+  if (e.metaKey) parts.push('⌘');
+  if (e.ctrlKey) parts.push('⌃');
+  if (e.altKey) parts.push('⌥');
+  if (e.shiftKey) parts.push('⇧');
+  return parts.join('');
+}
+
+const hotkeyEl = $('hotkey');
+hotkeyEl.addEventListener('focus', () => {
+  window.hud.suspendHotkey();
+  hotkeyEl.value = 'Press shortcut…';
+  $('hotkey-hint').textContent = 'Press keys · Esc cancel · ⌫ clear hotkey';
+});
+hotkeyEl.addEventListener('blur', () => {
+  window.hud.resumeHotkey();
+  applySettingsUI(lastSettings);
+});
+hotkeyEl.addEventListener('keydown', (e) => {
+  e.preventDefault();
   e.stopPropagation();
+  if (e.key === 'Escape') { hotkeyEl.blur(); return; }
+  if (e.key === 'Backspace' || e.key === 'Delete') {
+    window.hud.setSettings({ hotkey: '' });
+    hotkeyEl.blur();
+    return;
+  }
+  const acc = accFromEvent(e);
+  if (acc) {
+    window.hud.setSettings({ hotkey: acc });
+    hotkeyEl.blur();
+  } else {
+    const mods = prettyMods(e);
+    hotkeyEl.value = mods ? mods + '…' : 'Press shortcut…';
+  }
 });
 
 window.hud.onSettings(applySettingsUI);

@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('hud', {
   onHotkeyFocus: (cb) => ipcRenderer.on('hotkey-focus', () => cb()),
   onNavClear: (cb) => ipcRenderer.on('nav-clear', () => cb()),
   returnFocus: () => ipcRenderer.send('return-focus'),
+  suspendHotkey: () => ipcRenderer.send('suspend-hotkey'),
+  resumeHotkey: () => ipcRenderer.send('resume-hotkey'),
   onState: (cb) => ipcRenderer.on('state', (_e, state) => cb(state)),
   close: () => ipcRenderer.send('close-window'),
 });

@@ -72,7 +72,8 @@
     border-radius: 6px; color: #d0d4e0; font-size: 11px; padding: 4px 7px; outline: none;
     font-family: inherit;
   }
-  #settings input[type=text]:focus { border-color: rgba(96,165,250,0.6); }
+  #settings input[type=text] { cursor: pointer; text-align: center; }
+  #settings input[type=text]:focus { border-color: rgba(96,165,250,0.7); background: rgba(96,165,250,0.10); cursor: default; }
   #settings .hint { color: #565b6b; font-size: 10px; margin-top: 6px; }
   #settings .hint.error { color: #ff7070; }
   .card.selected { border-color: rgba(96,165,250,0.8); background: rgba(96,165,250,0.10); }
@@ -139,7 +140,7 @@
     <label><span class="lbl">Opacity · focused</span><input type="range" id="op-f" min="0.2" max="1" step="0.05"><span class="val" id="op-f-v"></span></label>
     <label><span class="lbl">Opacity · unfocused</span><input type="range" id="op-u" min="0.15" max="1" step="0.05"><span class="val" id="op-u-v"></span></label>
     <label><input type="checkbox" id="compact"> Compact view</label>
-    <label><span class="lbl">Global hotkey</span><input type="text" id="hotkey" spellcheck="false" placeholder="e.g. Control+Shift+Space"></label>
+    <label><span class="lbl">Global hotkey</span><input type="text" id="hotkey" readonly placeholder="click to record"></label>
     <div class="hint" id="hotkey-hint">Press hotkey from any app · ↑↓ navigate · Enter jump · Esc back</div>
   </div>
   <div id="list"><div class="empty">Waiting for sessions…</div></div>
