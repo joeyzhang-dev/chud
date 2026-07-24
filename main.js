@@ -136,7 +136,7 @@ app.whenReady().then(() => {
   }
   loadSettings();
   createWindow();
-  setInterval(followDisplayTick, 1500);
+  setInterval(followDisplayTick, 250);
 
   collector = new Collector((state) => {
     if (win && !win.isDestroyed()) win.webContents.send('state', state);
