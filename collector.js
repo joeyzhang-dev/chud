@@ -256,14 +256,16 @@ class Collector {
     if (!surfaces.length) return null;
     const term = surfaces.filter((x) => x.type === 'terminal');
     const byUuid = (id) => (id ? term.find((x) => x.uuid.toLowerCase() === String(id).toLowerCase()) : null);
-    // tty is only trustworthy when the session really is hosted by cmux —
-    // otherwise a stale value can collide with an unrelated tab.
     const inCmux = s.focus?.bundle === 'com.cmuxterm.app' || !!s.focus?.cmuxShim;
+    // tty outranks the shim: Claude Code snapshots $PATH at session start, so
+    // the cmux-cli-shims UUID still points at the tab the session STARTED in.
+    // `claude --resume` in a new tab leaves it stale, while the controlling
+    // tty always tracks where the process actually lives.
     const byTty = inCmux && s.focus?.tty ? term.find((x) => x.tty === s.focus.tty) : null;
     return (
       byUuid(s.focus?.cmuxSurface) ||   // explicit env var (usually unset)
-      byUuid(s.focus?.cmuxShim) ||      // $PATH shim dir — exact, always present in cmux
-      byTty ||                          // controlling tty
+      byTty ||                          // controlling tty — survives resume
+      byUuid(s.focus?.cmuxShim) ||      // $PATH shim dir — exact, but frozen at start
       matchSurfaceByTitle(term, s) ||   // title/cwd heuristic
       null
     );
