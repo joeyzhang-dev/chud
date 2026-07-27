@@ -73,6 +73,7 @@ function cardHtml(s) {
         ${tabs}
         <span class="badge ${s.source}">${s.source === 'claude' ? 'CLAUDE' : 'COPILOT'}</span>
         ${liveBadge}
+        <span class="mirror-btn" title="Open live mirror (or swipe right)">\u276e</span>
         <span class="time">${timeAgo(s.lastActivity)}</span>
       </div>
       ${ctx ? `<div class="ctx">${esc(ctx)}</div>` : ''}
@@ -335,7 +336,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     const card = document.querySelectorAll('.card')[sel];
     const k = card?.dataset.key;
-    if (k) (lastSettings.mirrorOnClick !== false ? window.hud.openMirror(k) : window.hud.focusSession(k));
+    if (k) (window.hud.focusSession(k));
     sel = -1; applySel();
   } else if (e.key === 'Escape') {
     e.preventDefault();
@@ -360,11 +361,29 @@ document.getElementById('list').addEventListener('click', (e) => {
     window.hud.openPort(chip.dataset.port);
     return;
   }
+  const mbtn = e.target.closest('.mirror-btn');
+  if (mbtn) {
+    e.stopPropagation();
+    const c = mbtn.closest('.card');
+    if (c?.dataset.key && lastSettings.mirrorOnClick !== false) window.hud.openMirror(c.dataset.key);
+    return;
+  }
   const card = e.target.closest('.card');
   if (!card || !card.dataset.key) return;
   card.classList.add('clicked');
   setTimeout(() => card.classList.remove('clicked'), 400);
   const k = card.dataset.key;
-  (lastSettings.mirrorOnClick !== false ? window.hud.openMirror(k) : window.hud.focusSession(k));
+  (window.hud.focusSession(k));
 });
+// Two-finger swipe right on a card opens its live mirror.
+let lastSwipe = 0;
+document.getElementById('list').addEventListener('wheel', (e) => {
+  if (e.deltaX >= -25 || Math.abs(e.deltaX) < Math.abs(e.deltaY)) return;
+  const card = e.target.closest('.card');
+  if (!card?.dataset.key || lastSettings.mirrorOnClick === false) return;
+  if (Date.now() - lastSwipe < 900) return;
+  lastSwipe = Date.now();
+  window.hud.openMirror(card.dataset.key);
+}, { passive: true });
+
 setInterval(render, 15000);

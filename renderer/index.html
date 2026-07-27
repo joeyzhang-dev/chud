@@ -140,6 +140,10 @@
   /* repo name, shown when the cmux tab was renamed to something else */
   .ctx { margin-top: 2px; color: #6f7488; font-size: 10px; }
   .ctx::before { content: "▸ "; opacity: 0.7; }
+  /* per-card mirror opener */
+  .mirror-btn { color: #565b6b; font-size: 11px; padding: 0 4px; border-radius: 5px;
+                flex-shrink: 0; cursor: pointer; }
+  .mirror-btn:hover { background: rgba(74,222,128,0.18); color: #7dd3a8; }
   /* one-of-N tabs in the same pane */
   .tabs { font-size: 9px; color: #7c8194; background: rgba(255,255,255,0.07);
           padding: 1px 4px; border-radius: 4px; flex-shrink: 0; }
@@ -180,7 +184,7 @@
     <label><span class="lbl">Opacity · unfocused</span><input type="range" id="op-u" min="0.15" max="1" step="0.05"><span class="val" id="op-u-v"></span></label>
     <label><input type="checkbox" id="compact"> Compact view</label>
     <label><input type="checkbox" id="follow"> Follow active monitor</label>
-    <label><input type="checkbox" id="mirror-click"> Click opens live mirror</label>
+    <label><input type="checkbox" id="mirror-click"> Live mirror (\u276e button / swipe right)</label>
     <label><input type="checkbox" id="done-sound"> Sound when a prompt finishes</label>
     <label><span class="lbl">Sound folder</span><input type="text" id="done-sound-dir" class="pathbox" readonly placeholder="click to choose folder" title="Click to choose the sound folder"></label>
     <label><span class="lbl">Sound volume</span><input type="range" id="done-vol" min="0" max="1" step="0.05"><span class="val" id="done-vol-v"></span></label>
