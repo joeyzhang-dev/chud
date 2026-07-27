@@ -131,6 +131,8 @@ function applySettingsUI(s) {
   $('app').classList.toggle('compact', !!s.compact);
   $('follow').checked = !!s.followDisplay;
   $('done-sound').checked = !!s.doneSound;
+  $('done-vol').value = s.doneSoundVolume ?? 1;
+  $('done-vol-v').textContent = Math.round((s.doneSoundVolume ?? 1) * 100) + '%';
   $('done-sound-dir').value = s.doneSoundDir || '';
   const sym = { Command: '⌘', Control: '⌃', Alt: '⌥', Shift: '⇧' };
   const pretty = (acc) => (acc || '').split('+').map((p) => sym[p] || p).join(' ');
@@ -168,6 +170,14 @@ $('follow').addEventListener('change', (e) => {
 });
 $('done-sound').addEventListener('change', (e) => {
   window.hud.setSettings({ doneSound: e.target.checked });
+});
+let volPreviewTimer = null;
+$('done-vol').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  $('done-vol-v').textContent = Math.round(v * 100) + '%';
+  window.hud.setSettings({ doneSoundVolume: v });
+  clearTimeout(volPreviewTimer); // preview once per pause in the drag
+  volPreviewTimer = setTimeout(() => window.hud.previewSound(v), 200);
 });
 $('done-sound-dir').addEventListener('click', async (e) => {
   const dir = await window.hud.pickSoundDir(); // native folder dialog; persists on pick

@@ -7,7 +7,7 @@ const { Collector } = require('./collector');
 let win;
 let collector;
 
-const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', toggleHotkey: 'Control+Shift+H', followDisplay: true, doneSound: true, doneSoundDir: '/Users/joey/Downloads/claude sfx' };
+const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', toggleHotkey: 'Control+Shift+H', followDisplay: true, doneSound: true, doneSoundDir: '/Users/joey/Downloads/claude sfx', doneSoundVolume: 1 };
 
 // Random sound from the configured folder when any session finishes a turn.
 // Lives here (not in per-agent hooks) so Copilot sessions get it too.
@@ -15,12 +15,28 @@ let lastSoundAt = 0;
 function playDoneSound() {
   if (!settings.doneSound || !settings.doneSoundDir) return;
   if (Date.now() - lastSoundAt < 2000) return; // several finishes at once = one sound
+  const f = pickRandomSound();
+  if (!f) return;
+  lastSoundAt = Date.now();
+  execFile('afplay', ['-v', String(settings.doneSoundVolume ?? 1), f], () => {});
+}
+
+function pickRandomSound() {
   try {
-    const files = fs.readdirSync(settings.doneSoundDir).filter((f) => /\.(mp3|wav|m4a|aiff|ogg)$/i.test(f));
-    if (!files.length) return;
-    lastSoundAt = Date.now();
-    execFile('afplay', [path.join(settings.doneSoundDir, files[Math.floor(Math.random() * files.length)])], () => {});
-  } catch { /* folder missing - silent */ }
+    const files = fs.readdirSync(settings.doneSoundDir).filter((x) => /\.(mp3|wav|m4a|aiff|ogg)$/i.test(x));
+    if (!files.length) return null;
+    return path.join(settings.doneSoundDir, files[Math.floor(Math.random() * files.length)]);
+  } catch { return null; }
+}
+
+// Slider preview: replay at the new volume, killing the previous preview so
+// dragging doesn't stack overlapping sounds.
+let previewChild = null;
+function previewSound(vol) {
+  const f = pickRandomSound();
+  if (!f) return;
+  if (previewChild) { try { previewChild.kill(); } catch { /* gone */ } }
+  previewChild = execFile('afplay', ['-v', String(vol), f], () => { previewChild = null; });
 }
 
 // Hop to whichever display the cursor is on, keeping the window's relative
@@ -192,6 +208,10 @@ app.whenReady().then(() => {
   ipcMain.handle('get-state', () => collector.getState());
   ipcMain.handle('focus-session', (_e, key) => collector.focusSession(key));
   ipcMain.handle('refresh', () => collector.refreshAll());
+  ipcMain.on('preview-sound', (_e, v) => {
+    const vol = Math.min(1, Math.max(0, Number(v) || 0));
+    previewSound(vol);
+  });
   ipcMain.handle('pick-sound-dir', async () => {
     const r = await dialog.showOpenDialog(win, {
       title: 'Choose sound folder',

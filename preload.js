@@ -15,5 +15,6 @@ contextBridge.exposeInMainWorld('hud', {
   openPort: (port) => ipcRenderer.send('open-port', port),
   refresh: () => ipcRenderer.invoke('refresh'),
   pickSoundDir: () => ipcRenderer.invoke('pick-sound-dir'),
+  previewSound: (v) => ipcRenderer.send('preview-sound', v),
   close: () => ipcRenderer.send('close-window'),
 });
