@@ -71,15 +71,13 @@ class Collector {
       .filter((s) => now - s.lastActivity < MAX_AGE_MS)
       .map((s) => ({ ...s, status: this.effectiveStatus(s, now) }));
     const rank = { 'needs-input': 0, working: 1, done: 2, idle: 3, ended: 4 };
-    list.sort((a, b) => (rank[a.status] - rank[b.status]) || (b.lastActivity - a.lastActivity));
+    // Deterministic tiebreak so equal-rank cards never swap between emits.
+    list.sort((a, b) => (rank[a.status] - rank[b.status]) || (b.lastActivity - a.lastActivity)
+      || String(a.key).localeCompare(String(b.key)));
     return { sessions: list, updatedAt: now };
   }
 
   effectiveStatus(s, now) {
-    // A running agent process with work in flight beats anything on disk.
-    // Copilot only persists at turn boundaries, so its rows look stale for the
-    // whole time it is actually busy.
-    if (s.agentBusy) return 'working';
     let status = s.status;
     if (!s.hookDriven) {
       // Inferred purely from file/db recency
@@ -124,6 +122,11 @@ class Collector {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: true, sessions: n }));
         });
+      } else if (req.method === 'GET' && req.url.startsWith('/audit')) {
+        this.audit().then((a) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(a, null, 2));
+        }).catch((e) => { res.writeHead(500); res.end(String(e && e.message)); });
       } else if (req.method === 'GET' && req.url.startsWith('/agents')) {
         agentProcesses().then((a) => {
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -331,22 +334,15 @@ class Collector {
     if (!agents.length) return;
     this.adoptAgents(agents);
 
-    // Busy means CPU time actually advanced since the last poll. `ps %cpu` is a
-    // lifetime average, so a process that once worked hard looks busy forever;
-    // a child count is no better, since MCP servers are long-lived children.
-    const prev = this.prevCpu || new Map();
-    const next = new Map();
+    // Liveness only. CPU was tried as a "generating right now" signal and
+    // measured to be non-discriminating: an idle Copilot TUI repainting its
+    // prompt burns MORE cpu-time per interval (0.3-0.9s/5s) than a Claude
+    // session actively streaming tokens (0.35s/5s). Screens (`cmux
+    // read-screen`, see /audit) are the only honest work-in-progress signal;
+    // until one exists per source, status comes from hooks (Claude) and
+    // turn-boundary writes (Copilot), and `live` just means "agent still open".
     const liveCwds = new Set();
-    const busyCwds = new Set();
-    for (const a of agents) {
-      next.set(a.pid, a.cpuSec);
-      if (!a.cwd) continue;
-      const k = `${a.kind} ${a.cwd}`;
-      liveCwds.add(k);
-      const before = prev.get(a.pid);
-      if (before !== undefined && a.cpuSec - before > 0.15) busyCwds.add(k);
-    }
-    this.prevCpu = next;
+    for (const a of agents) if (a.cwd) liveCwds.add(`${a.kind} ${a.cwd}`);
 
     // Among sessions sharing a cwd only the most recent counts, so a project
     // with eight historical sessions yields one card, not eight.
@@ -358,15 +354,13 @@ class Collector {
       const prev = newest.get(k);
       if (!prev || s.lastActivity > prev.lastActivity) newest.set(k, { key, lastActivity: s.lastActivity });
     }
-    const liveKeys = new Map();
-    for (const [k, v] of newest) liveKeys.set(v.key, busyCwds.has(k));
+    const liveKeys = new Set([...newest.values()].map((v) => v.key));
 
     let changed = false;
     for (const [key, s] of this.sessions) {
       const live = liveKeys.has(key);
-      const busy = live && liveKeys.get(key);
-      if (s.live !== live || s.agentBusy !== busy) {
-        this.sessions.set(key, { ...s, live, agentBusy: busy });
+      if (s.live !== live || s.agentBusy) {
+        this.sessions.set(key, { ...s, live, agentBusy: false });
         changed = true;
       }
     }
@@ -392,12 +386,13 @@ class Collector {
         source: a.kind,
         cwd: a.cwd,
         sessionId: `pid-${a.pid}`,
-        // No transcript to read, so status comes from the process itself.
-        status: a.children > 0 || a.cpu > 3 ? 'working' : 'idle',
+        // No transcript, so no honest status claim — idle + LIVE badge. Keep
+        // first-seen time; bumping it every poll made cards churn the sort.
+        status: 'idle',
         hookDriven: true,           // don't let recency inference override us
         live: true,
         fromProcess: true,
-        lastActivity: Date.now(),
+        lastActivity: existing?.lastActivity || Date.now(),
       });
     }
     // Drop adopted entries whose process is gone and that never gained a
@@ -406,6 +401,36 @@ class Collector {
     for (const key of [...this.sessions.keys()]) {
       if (String(key).startsWith('proc:') && !alive.has(key)) this.sessions.delete(key);
     }
+  }
+
+  // Ground-truth check: read every terminal surface's actual screen and set
+  // it against what the cards claim. `esc to interrupt` in Claude Code's
+  // status bar only renders while a turn is running, so it is a reliable
+  // working marker; braille spinner glyphs cover other TUIs heuristically.
+  async audit() {
+    const surfaces = await this.cmuxSurfaces().catch(() => []);
+    const screens = [];
+    for (const x of surfaces) {
+      if (x.type !== 'terminal') continue;
+      const out = await run(CMUX_BIN, ['read-screen', '--surface', x.uuid, '--lines', '25']);
+      const lines = String(out || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim());
+      const tail = lines.slice(-12).join('\n');
+      screens.push({
+        title: x.title,
+        uuid: x.uuid,
+        working: /esc to interrupt|[\u2800-\u28FF]/.test(tail),
+        lastLine: lines[lines.length - 1] || '',
+      });
+    }
+    const cards = this.getState().sessions.map((s) => ({
+      name: s.tabTitle || s.cwd, status: s.status, live: !!s.live, source: s.source,
+    }));
+    return {
+      screensWorking: screens.filter((x) => x.working).length,
+      cardsWorking: cards.filter((c) => c.status === 'working').length,
+      screens,
+      cards: cards.filter((c) => c.status === 'working' || c.live),
+    };
   }
 
   // Full re-scan: forget cached file mtimes and re-read every source.
@@ -728,7 +753,10 @@ function matchSurfaceByTitle(surfaces, s) {
   // `pop()` is undefined for cwd "/" — guard before folding case.
   const proj = (s.cwd ? s.cwd.split('/').filter(Boolean).pop() : '')?.toLowerCase() || null;
   if (proj) {
-    const hit = surfaces.find((x) => x.match.includes('/' + proj) || x.match.endsWith(proj));
+    // Segment-exact: cwd ~/Developer must match "~/developer", NOT every
+    // "~/developer/<repo>" tab (that substring bug pinned a session to four
+    // bare shells titled ~/Developer/vulnerability-aggregator).
+    const hit = surfaces.find((x) => x.match === proj || x.match.endsWith('/' + proj));
     if (hit) return hit;
   }
   return null;
