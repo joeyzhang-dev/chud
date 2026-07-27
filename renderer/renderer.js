@@ -314,6 +314,11 @@ function moveSel(delta) {
   applySel();
 }
 
+// Cmd+S / Cmd+R while the HUD is focused — reuse the buttons' own handlers.
+window.hud.onKb((a) => {
+  if (a === 'settings') $('gear').click();
+  else if (a === 'refresh') $('refresh').click();
+});
 window.hud.onHotkeyFocus(() => { sel = 0; applySel(); });
 window.hud.onNavClear(() => { sel = -1; applySel(); });
 

@@ -181,6 +181,14 @@ function createWindow() {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.on('focus', () => win.setOpacity(settings.focusedOpacity));
   win.on('blur', () => win.setOpacity(settings.unfocusedOpacity));
+  // In-window keybinds. before-input-event beats the default menu's
+  // accelerators (Cmd+R would otherwise reload the page).
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !input.meta || input.alt || input.control) return;
+    const k = String(input.key).toLowerCase();
+    if (k === 's') { event.preventDefault(); win.webContents.send('kb', 'settings'); }
+    else if (k === 'r') { event.preventDefault(); win.webContents.send('kb', 'refresh'); }
+  });
   win.webContents.on('did-finish-load', () => applySettings());
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
