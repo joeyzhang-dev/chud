@@ -66,6 +66,8 @@ function cardHtml(s) {
       ).join('')}</div>`
     : '';
   return `
+    <div class="swipe-wrap">
+    <div class="reveal"><span class="rv-ic">\u29c9</span> open mirror</div>
     <div class="card ${s.status}" data-key="${esc(s.key)}" title="Click to jump to this session">
       <div class="row">
         <span class="dot ${s.status}"></span>
@@ -81,10 +83,12 @@ function cardHtml(s) {
       ${ports}
       ${s.title || s.lastPrompt ? `<div class="prompt">${esc(s.title || s.lastPrompt)}</div>` : ''}
       ${s.lastReply && s.status !== 'working' ? `<div class="reply">${esc(s.lastReply)}</div>` : ''}
+    </div>
     </div>`;
 }
 
 function render() {
+  if (swipeHold) return; // never rebuild the DOM mid-swipe
   const list = document.getElementById('list');
   const sessions = state.sessions || [];
   const active = sessions.filter(isCurrent);
@@ -375,15 +379,49 @@ document.getElementById('list').addEventListener('click', (e) => {
   const k = card.dataset.key;
   (window.hud.focusSession(k));
 });
-// Two-finger swipe right on a card opens its live mirror.
-let lastSwipe = 0;
+// iOS-style swipe-right on a card: the card tracks the gesture, a green
+// "open mirror" layer reveals beneath, arming past the threshold; release
+// while armed opens the mirror, otherwise the card springs back.
+const SWIPE_ARM = 90, SWIPE_MAX = 132;
+let swipe = null; // { wrap, card, reveal, key, x, timer, armed }
+let swipeHold = false; // suppress re-renders mid-gesture
+
+function endSwipe() {
+  if (!swipe) return;
+  const { card, reveal, key, armed } = swipe;
+  card.style.transition = 'transform .28s cubic-bezier(.2,.8,.3,1.12)';
+  card.style.transform = 'translateX(0)';
+  reveal.style.transition = 'opacity .22s ease';
+  reveal.style.opacity = '0';
+  reveal.classList.remove('armed');
+  swipe = null;
+  setTimeout(() => { swipeHold = false; render(); }, 300);
+  if (armed && lastSettings.mirrorOnClick !== false) window.hud.openMirror(key);
+}
+
 document.getElementById('list').addEventListener('wheel', (e) => {
-  if (e.deltaX >= -25 || Math.abs(e.deltaX) < Math.abs(e.deltaY)) return;
-  const card = e.target.closest('.card');
-  if (!card?.dataset.key || lastSettings.mirrorOnClick === false) return;
-  if (Date.now() - lastSwipe < 900) return;
-  lastSwipe = Date.now();
-  window.hud.openMirror(card.dataset.key);
+  if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return; // vertical scroll
+  const wrap = e.target.closest('.swipe-wrap');
+  const card = wrap?.querySelector('.card');
+  if (!card?.dataset.key) return;
+  if (swipe && swipe.card !== card) return; // one gesture at a time
+  if (!swipe) {
+    if (e.deltaX >= 0) return; // only rightward swipes begin a gesture
+    swipeHold = true;
+    swipe = { wrap, card, reveal: wrap.querySelector('.reveal'), key: card.dataset.key, x: 0, timer: null, armed: false };
+  }
+  swipe.x = Math.max(0, Math.min(SWIPE_MAX, swipe.x - e.deltaX));
+  card.style.transition = 'none';
+  card.style.transform = `translateX(${swipe.x}px)`;
+  swipe.reveal.style.transition = 'none';
+  swipe.reveal.style.opacity = String(Math.min(1, swipe.x / 55));
+  const armed = swipe.x >= SWIPE_ARM;
+  if (armed !== swipe.armed) {
+    swipe.armed = armed;
+    swipe.reveal.classList.toggle('armed', armed); // threshold pop
+  }
+  clearTimeout(swipe.timer);
+  swipe.timer = setTimeout(endSwipe, 140); // trackpads emit no "gesture end"
 }, { passive: true });
 
 setInterval(render, 15000);
