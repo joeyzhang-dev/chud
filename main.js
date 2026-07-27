@@ -120,7 +120,12 @@ function updateSettings(patch) {
 }
 
 function createWindow() {
+  // Start at the top-right of whichever display the cursor is on — restarts
+  // (frequent while iterating on the HUD) kept dropping it in screen center.
+  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   win = new BrowserWindow({
+    x: wa.x + wa.width - 360 - 12,
+    y: wa.y + 12,
     width: 360,
     height: 540,
     minWidth: 280,

@@ -467,8 +467,15 @@ class Collector {
       const val = working.get(uuid);
       for (const key of keys) {
         const s = this.sessions.get(key);
-        if (s && s.screenWorking !== val) {
-          this.sessions.set(key, { ...s, screenWorking: val });
+        if (!s) continue;
+        // A screen that shows work in progress IS activity — otherwise a
+        // Copilot card ages for the whole turn (its DB froze at turn start)
+        // and reads "WORKING · 3h 27m".
+        if (val) {
+          this.sessions.set(key, { ...s, screenWorking: true, lastActivity: Date.now() });
+          changed = true;
+        } else if (s.screenWorking !== val) {
+          this.sessions.set(key, { ...s, screenWorking: false });
           changed = true;
         }
       }
@@ -713,9 +720,12 @@ class Collector {
       let changed = false;
       for (const r of rows) {
         const key = `copilot:${r.id}`;
-        const lastActivity = Date.parse(r.updated_at + 'Z') || Date.parse(r.updated_at) || Date.now();
+        const dbLast = Date.parse(r.updated_at + 'Z') || Date.parse(r.updated_at) || Date.now();
         const existing = this.sessions.get(key);
-        if (existing && existing.lastActivity === lastActivity) continue;
+        // Skip on the DB's own timestamp — comparing against lastActivity
+        // would re-upsert forever once a screen-working bump moved it ahead,
+        // and the write would drag the card back to the stale DB time.
+        if (existing && existing.dbLast === dbLast) continue;
         const meta = copilotSessionMeta(r.id);
         this.upsert(key, {
           source: 'copilot',
@@ -727,7 +737,8 @@ class Collector {
           client: meta.client,
           lastPrompt: cleanPrompt(r.last_user),
           lastReply: clean(r.last_assistant),
-          lastActivity,
+          dbLast,
+          lastActivity: Math.max(dbLast, existing?.lastActivity || 0),
         });
         changed = true;
       }
