@@ -15,17 +15,21 @@ let lastSoundAt = 0;
 function playDoneSound() {
   if (!settings.doneSound || !settings.doneSoundDir) return;
   if (Date.now() - lastSoundAt < 2000) return; // several finishes at once = one sound
-  const f = pickRandomSound();
-  if (!f) return;
+  const pick = pickRandomSound();
+  if (!pick) return;
   lastSoundAt = Date.now();
-  execFile('afplay', ['-v', String(settings.doneSoundVolume ?? 1), f], () => {});
+  execFile('afplay', ['-v', String((settings.doneSoundVolume ?? 1) * pick.vol), pick.file], () => {});
 }
 
 function pickRandomSound() {
   try {
-    const files = fs.readdirSync(settings.doneSoundDir).filter((x) => /\.(mp3|wav|m4a|aiff|ogg)$/i.test(x));
+    const cfg = settings.soundConfig || {};
+    const files = fs.readdirSync(settings.doneSoundDir)
+      .filter((x) => /\.(mp3|wav|m4a|aiff|ogg)$/i.test(x))
+      .filter((x) => cfg[x]?.enabled !== false);
     if (!files.length) return null;
-    return path.join(settings.doneSoundDir, files[Math.floor(Math.random() * files.length)]);
+    const n = files[Math.floor(Math.random() * files.length)];
+    return { file: path.join(settings.doneSoundDir, n), vol: cfg[n]?.volume ?? 1 };
   } catch { return null; }
 }
 
@@ -33,10 +37,14 @@ function pickRandomSound() {
 // dragging doesn't stack overlapping sounds.
 let previewChild = null;
 function previewSound(vol) {
-  const f = pickRandomSound();
-  if (!f) return;
+  const pick = pickRandomSound();
+  if (!pick) return;
+  playPreview(pick.file, vol * pick.vol);
+}
+
+function playPreview(file, vol) {
   if (previewChild) { try { previewChild.kill(); } catch { /* gone */ } }
-  previewChild = execFile('afplay', ['-v', String(vol), f], () => { previewChild = null; });
+  previewChild = execFile('afplay', ['-v', String(Math.min(1, Math.max(0, vol))), file], () => { previewChild = null; });
 }
 
 // Hop to whichever display the cursor is on, keeping the window's relative
@@ -211,6 +219,18 @@ app.whenReady().then(() => {
   ipcMain.on('preview-sound', (_e, v) => {
     const vol = Math.min(1, Math.max(0, Number(v) || 0));
     previewSound(vol);
+  });
+  ipcMain.handle('list-sounds', () => {
+    let files = [];
+    try {
+      files = fs.readdirSync(settings.doneSoundDir).filter((x) => /\.(mp3|wav|m4a|aiff|ogg)$/i.test(x)).sort();
+    } catch { /* folder missing */ }
+    const cfg = settings.soundConfig || {};
+    return files.map((n) => ({ name: n, enabled: cfg[n]?.enabled !== false, volume: cfg[n]?.volume ?? 1 }));
+  });
+  ipcMain.on('preview-file', (_e, name, vol) => {
+    if (typeof name !== 'string' || name.includes('/') || name.includes('..')) return;
+    playPreview(require('path').join(settings.doneSoundDir, name), Number(vol) || 0);
   });
   ipcMain.handle('pick-sound-dir', async () => {
     const r = await dialog.showOpenDialog(win, {

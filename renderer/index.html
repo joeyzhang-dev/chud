@@ -78,6 +78,12 @@
   }
   #settings input[type=text] { cursor: pointer; text-align: center; }
   #settings input.pathbox { cursor: pointer; text-align: left; white-space: nowrap; text-overflow: ellipsis; }
+  #sound-list.hidden { display: none; }
+  #sound-list .srow { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 10.5px; color: #9aa0b0; }
+  #sound-list .srow .nm { flex: 0 0 104px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sound-list .srow input[type=range] { flex: 1; }
+  #sound-list .srow .val { flex: 0 0 30px; text-align: right; color: #7c8194; font-variant-numeric: tabular-nums; }
+  #settings .toggle { margin-top: 7px; }
   #settings input[type=text]:focus { border-color: rgba(96,165,250,0.7); background: rgba(96,165,250,0.10); cursor: default; }
   #settings .hint { color: #565b6b; font-size: 10px; margin-top: 6px; }
   #settings .hint.error { color: #ff7070; }
@@ -177,6 +183,8 @@
     <label><input type="checkbox" id="done-sound"> Sound when a prompt finishes</label>
     <label><span class="lbl">Sound folder</span><input type="text" id="done-sound-dir" class="pathbox" readonly placeholder="click to choose folder" title="Click to choose the sound folder"></label>
     <label><span class="lbl">Sound volume</span><input type="range" id="done-vol" min="0" max="1" step="0.05"><span class="val" id="done-vol-v"></span></label>
+    <button class="toggle" id="sound-adv" type="button"><span class="chev">▸</span> Per-sound settings</button>
+    <div id="sound-list" class="hidden"></div>
     <label><span class="lbl">Focus hotkey</span><input type="text" id="hotkey" readonly placeholder="click to record"></label>
     <label><span class="lbl">Hide/show hotkey</span><input type="text" id="toggle-hotkey" readonly placeholder="click to record"></label>
     <div class="hint" id="hotkey-hint">Press hotkey from any app · ↑↓ navigate · Enter jump · Esc back</div>

@@ -16,5 +16,7 @@ contextBridge.exposeInMainWorld('hud', {
   refresh: () => ipcRenderer.invoke('refresh'),
   pickSoundDir: () => ipcRenderer.invoke('pick-sound-dir'),
   previewSound: (v) => ipcRenderer.send('preview-sound', v),
+  listSounds: () => ipcRenderer.invoke('list-sounds'),
+  previewFile: (n, v) => ipcRenderer.send('preview-file', n, v),
   close: () => ipcRenderer.send('close-window'),
 });

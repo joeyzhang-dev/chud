@@ -171,6 +171,48 @@ $('follow').addEventListener('change', (e) => {
 $('done-sound').addEventListener('change', (e) => {
   window.hud.setSettings({ doneSound: e.target.checked });
 });
+// ---- per-sound settings (expandable) ----
+let soundCfg = {};
+async function renderSoundList() {
+  const list = await window.hud.listSounds();
+  soundCfg = {};
+  for (const x of list) soundCfg[x.name] = { enabled: x.enabled, volume: x.volume };
+  $('sound-list').innerHTML = list.length ? list.map((x) => `
+    <div class="srow" data-n="${esc(x.name)}">
+      <input type="checkbox" ${x.enabled ? 'checked' : ''} title="Enable this sound">
+      <span class="nm" title="${esc(x.name)}">${esc(x.name)}</span>
+      <input type="range" min="0" max="1" step="0.05" value="${x.volume}">
+      <span class="val">${Math.round(x.volume * 100)}%</span>
+    </div>`).join('') : '<div class="hint">No sound files in the folder.</div>';
+}
+$('sound-adv').addEventListener('click', async () => {
+  const el = $('sound-list');
+  el.classList.toggle('hidden');
+  $('sound-adv').querySelector('.chev').textContent = el.classList.contains('hidden') ? '\u25b8' : '\u25be';
+  if (!el.classList.contains('hidden')) await renderSoundList();
+});
+let srowTimer = null;
+$('sound-list').addEventListener('change', (e) => {
+  if (e.target.type !== 'checkbox') return;
+  const n = e.target.closest('.srow')?.dataset.n;
+  if (!n) return;
+  soundCfg[n] = { ...soundCfg[n], enabled: e.target.checked };
+  window.hud.setSettings({ soundConfig: soundCfg });
+});
+$('sound-list').addEventListener('input', (e) => {
+  if (e.target.type !== 'range') return;
+  const row = e.target.closest('.srow'); const n = row?.dataset.n;
+  if (!n) return;
+  const v = parseFloat(e.target.value);
+  row.querySelector('.val').textContent = Math.round(v * 100) + '%';
+  soundCfg[n] = { ...soundCfg[n], volume: v };
+  clearTimeout(srowTimer);
+  srowTimer = setTimeout(() => {
+    window.hud.setSettings({ soundConfig: soundCfg });
+    window.hud.previewFile(n, v * (parseFloat($('done-vol').value) || 1)); // hear THIS sound at its effective volume
+  }, 200);
+});
+
 let volPreviewTimer = null;
 $('done-vol').addEventListener('input', (e) => {
   const v = parseFloat(e.target.value);
