@@ -58,6 +58,7 @@ function cardHtml(s) {
   const branch = s.branch ? ` <span class="branch">⎇ ${esc(s.branch)}</span>` : '';
   const ctx = contextLabel(s);
   const tabs = s.paneTabs > 1 ? `<span class="tabs" title="one of ${s.paneTabs} tabs in this pane">⧉${s.paneTabs}</span>` : '';
+  const liveBadge = s.live && s.status !== 'working' ? '<span class="badge live">LIVE</span>' : '';
   const ports = (s.ports || []).length
     ? `<div class="ports">${s.ports.map((p) =>
         `<span class="port" data-port="${p.port}" title="Open http://localhost:${p.port} — ${esc(p.cmd)}">:${p.port}</span>`
@@ -70,6 +71,7 @@ function cardHtml(s) {
         <span class="name">${esc(displayName(s))}</span>
         ${tabs}
         <span class="badge ${s.source}">${s.source === 'claude' ? 'CLAUDE' : 'COPILOT'}</span>
+        ${liveBadge}
         <span class="time">${timeAgo(s.lastActivity)}</span>
       </div>
       ${ctx ? `<div class="ctx">${esc(ctx)}</div>` : ''}
@@ -273,6 +275,11 @@ window.addEventListener('keydown', (e) => {
 window.hud.onState((s) => { state = s; render(); });
 window.hud.getState().then((s) => { state = s; render(); });
 document.getElementById('close').addEventListener('click', () => window.hud.close());
+document.getElementById('refresh').addEventListener('click', async (e) => {
+  const el = e.currentTarget;
+  el.classList.add('spin');
+  try { await window.hud.refresh(); } finally { setTimeout(() => el.classList.remove('spin'), 600); }
+});
 document.getElementById('list').addEventListener('click', (e) => {
   // Port chips open the browser instead of jumping to the session.
   const chip = e.target.closest('.port');

@@ -52,10 +52,12 @@ class Collector {
     this.pollCopilot();
     this.refreshCmux();
     this.pollPorts();
+    this.pollAgents();
     setInterval(() => this.scanClaude(), 5000);
     setInterval(() => this.pollCopilot(), 5000);
     setInterval(() => this.refreshCmux(), 4000);
     setInterval(() => this.pollPorts(), 5000);
+    setInterval(() => this.pollAgents(), 3000);
     setInterval(() => this.emit(), 10000); // refresh relative times
   }
 
@@ -74,6 +76,10 @@ class Collector {
   }
 
   effectiveStatus(s, now) {
+    // A running agent process with work in flight beats anything on disk.
+    // Copilot only persists at turn boundaries, so its rows look stale for the
+    // whole time it is actually busy.
+    if (s.agentBusy) return 'working';
     let status = s.status;
     if (!s.hookDriven) {
       // Inferred purely from file/db recency
@@ -113,6 +119,16 @@ class Collector {
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end(result);
         });
+      } else if (req.method === 'GET' && req.url.startsWith('/refresh')) {
+        this.refreshAll().then((n) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, sessions: n }));
+        });
+      } else if (req.method === 'GET' && req.url.startsWith('/agents')) {
+        agentProcesses().then((a) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(a, null, 2));
+        }).catch((e) => { res.writeHead(500); res.end(String(e && e.message)); });
       } else if (req.method === 'GET' && req.url.startsWith('/state')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(this.getState(), null, 2));
@@ -279,14 +295,6 @@ class Collector {
     if (!surfaces.length) return;
     this.surfaces = surfaces;
 
-    // Liveness is computed from running agent processes by cwd, deliberately
-    // WITHOUT going through surfaces: the tty->surface mapping is unreliable
-    // (see resolveSurface), and "is an agent running in this project right
-    // now" is the thing we actually care about for the default view.
-    const agents = await ttyAgents().catch(() => new Map());
-    const liveCwds = new Set();
-    for (const a of agents.values()) if (a.cwd) liveCwds.add(`${a.kind} ${a.cwd}`);
-
     const claimed = new Set();   // surface uuids already assigned
     const assign = new Map();    // session key -> surface
 
@@ -300,33 +308,119 @@ class Collector {
       }
     }
 
-    // Among sessions sharing a cwd, only the most recent counts as live, so a
-    // project with eight historical sessions yields one card, not eight.
-    const newestPerCwd = new Map();
-    for (const [key, s] of this.sessions) {
-      if (!s.cwd || !s.source) continue;
-      const k = `${s.source} ${s.cwd}`;
-      if (!liveCwds.has(k)) continue;
-      const prev = newestPerCwd.get(k);
-      if (!prev || s.lastActivity > prev.lastActivity) newestPerCwd.set(k, { key, lastActivity: s.lastActivity });
-    }
-    const liveKeys = new Set([...newestPerCwd.values()].map((v) => v.key));
-
     let changed = false;
     for (const [key, s] of this.sessions) {
       const hit = assign.get(key) || null;
       const tab = hit ? hit.title : null;
       const ws = hit ? hit.workspaceTitle : null;
       const siblings = hit ? hit.paneTabs : 0;
-      const live = liveKeys.has(key);
-      if (s.tabTitle !== tab || s.workspaceTitle !== ws || s.paneTabs !== siblings || s.live !== live) {
+      if (s.tabTitle !== tab || s.workspaceTitle !== ws || s.paneTabs !== siblings) {
         this.sessions.set(key, {
-          ...s, tabTitle: tab, workspaceTitle: ws, paneTabs: siblings, cmux: !!hit, live,
+          ...s, tabTitle: tab, workspaceTitle: ws, paneTabs: siblings, cmux: !!hit,
         });
         changed = true;
       }
     }
     if (changed) this.emit();
+  }
+
+  // Liveness runs independently of cmux: a hiccup talking to the cmux socket
+  // must never hide a session that is demonstrably running.
+  async pollAgents() {
+    const agents = await agentProcesses().catch(() => []);
+    if (!agents.length) return;
+    this.adoptAgents(agents);
+
+    // Busy means CPU time actually advanced since the last poll. `ps %cpu` is a
+    // lifetime average, so a process that once worked hard looks busy forever;
+    // a child count is no better, since MCP servers are long-lived children.
+    const prev = this.prevCpu || new Map();
+    const next = new Map();
+    const liveCwds = new Set();
+    const busyCwds = new Set();
+    for (const a of agents) {
+      next.set(a.pid, a.cpuSec);
+      if (!a.cwd) continue;
+      const k = `${a.kind} ${a.cwd}`;
+      liveCwds.add(k);
+      const before = prev.get(a.pid);
+      if (before !== undefined && a.cpuSec - before > 0.15) busyCwds.add(k);
+    }
+    this.prevCpu = next;
+
+    // Among sessions sharing a cwd only the most recent counts, so a project
+    // with eight historical sessions yields one card, not eight.
+    const newest = new Map();
+    for (const [key, s] of this.sessions) {
+      if (!s.cwd || !s.source) continue;
+      const k = `${s.source} ${s.cwd}`;
+      if (!liveCwds.has(k)) continue;
+      const prev = newest.get(k);
+      if (!prev || s.lastActivity > prev.lastActivity) newest.set(k, { key, lastActivity: s.lastActivity });
+    }
+    const liveKeys = new Map();
+    for (const [k, v] of newest) liveKeys.set(v.key, busyCwds.has(k));
+
+    let changed = false;
+    for (const [key, s] of this.sessions) {
+      const live = liveKeys.has(key);
+      const busy = live && liveKeys.get(key);
+      if (s.live !== live || s.agentBusy !== busy) {
+        this.sessions.set(key, { ...s, live, agentBusy: busy });
+        changed = true;
+      }
+    }
+    if (changed) this.emit();
+  }
+
+  // Copilot CLI only persists to its SQLite store at turn boundaries, so a
+  // session mid-turn — or one that has never finished a turn — is invisible to
+  // pollCopilot(). The running process is the only evidence that exists, so
+  // adopt it as a session in its own right when nothing on disk matches.
+  adoptAgents(agents) {
+    for (const a of agents) {
+      if (!a.cwd) continue;
+      const known = [...this.sessions.values()].some(
+        (s) => s.source === a.kind && s.cwd === a.cwd && !String(s.key).startsWith('proc:')
+      );
+      if (known) continue;
+      const key = `proc:${a.kind}:${a.cwd}`;
+      const existing = this.sessions.get(key);
+      this.sessions.set(key, {
+        ...existing,
+        key,
+        source: a.kind,
+        cwd: a.cwd,
+        sessionId: `pid-${a.pid}`,
+        // No transcript to read, so status comes from the process itself.
+        status: a.children > 0 || a.cpu > 3 ? 'working' : 'idle',
+        hookDriven: true,           // don't let recency inference override us
+        live: true,
+        fromProcess: true,
+        lastActivity: Date.now(),
+      });
+    }
+    // Drop adopted entries whose process is gone and that never gained a
+    // transcript, so stale cards don't linger.
+    const alive = new Set(agents.filter((a) => a.cwd).map((a) => `proc:${a.kind}:${a.cwd}`));
+    for (const key of [...this.sessions.keys()]) {
+      if (String(key).startsWith('proc:') && !alive.has(key)) this.sessions.delete(key);
+    }
+  }
+
+  // Full re-scan: forget cached file mtimes and re-read every source.
+  async refreshAll() {
+    this.fileCache.clear();
+    for (const [key, s] of [...this.sessions]) {
+      if (s.fromProcess) this.sessions.delete(key);
+    }
+    this.scanClaude();
+    this.pollCopilot();
+    await this.pollAgents().catch(() => {});
+    await this.refreshCmux().catch(() => {});
+    await this.pollPorts().catch(() => {});
+    this.emit();
+    return this.sessions.size;
   }
 
   // ---------- listening ports, attributed to sessions by cwd ----------
@@ -516,15 +610,24 @@ class Collector {
 // Agent processes attached to a terminal, keyed by tty. Lets us tell which
 // cmux tabs are genuinely in use, and gives Copilot sessions (which never
 // report their tty) a cwd to match on.
-function ttyAgents() {
+// ps TIME is cumulative CPU consumed: "12:34.56" or "1:02:03".
+function parseCpuTime(t) {
+  const parts = String(t).split(':').map(parseFloat);
+  if (parts.some(Number.isNaN)) return 0;
+  return parts.reduce((acc, v) => acc * 60 + v, 0);
+}
+
+function agentProcesses() {
   return new Promise((resolve) => {
-    execFile('ps', ['-Ao', 'pid=,tty=,args='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
-      if (err && !stdout) return resolve(new Map());
-      const found = new Map(); // tty -> {pid, kind}
+    execFile('ps', ['-Ao', 'pid=,ppid=,tty=,time=,args='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      if (err && !stdout) return resolve([]);
+      const procs = [];
+      const childCount = new Map();
       for (const line of String(stdout).split('\n')) {
-        const m = line.match(/^\s*(\d+)\s+(\S+)\s+(.*)$/);
+        const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s+([\d:.]+)\s+(.*)$/);
         if (!m) continue;
-        const [, pid, ttyRaw, args] = m;
+        const [, pid, ppid, ttyRaw, cputime, args] = m;
+        childCount.set(ppid, (childCount.get(ppid) || 0) + 1);
         const tty = ttyRaw.replace(/^\/dev\//, '');
         if (!/^ttys\d+$/.test(tty)) continue;
         // The agent binary itself, not shells or helpers that merely mention it.
@@ -532,20 +635,23 @@ function ttyAgents() {
           : /(^|\/)copilot(\s|$)/.test(args) ? 'copilot'
           : null;
         if (!kind) continue;
-        if (!found.has(tty)) found.set(tty, { pid, kind });
+        procs.push({ pid, tty, kind, cpuSec: parseCpuTime(cputime) });
       }
-      const pids = [...found.values()].map((v) => v.pid);
-      if (!pids.length) return resolve(found);
-      execFile('lsof', ['-a', '-d', 'cwd', '-p', pids.join(','), '-Fn'], { timeout: 5000 }, (e2, out2) => {
-        const cwds = new Map();
-        let cur = null;
-        for (const line of String(out2 || '').split('\n')) {
-          if (line.startsWith('p')) cur = line.slice(1);
-          else if (line.startsWith('n') && cur) cwds.set(cur, line.slice(1));
-        }
-        for (const v of found.values()) v.cwd = cwds.get(v.pid) || null;
-        resolve(found);
-      });
+      if (!procs.length) return resolve([]);
+      execFile('lsof', ['-a', '-d', 'cwd', '-p', procs.map((p) => p.pid).join(','), '-Fn'],
+        { timeout: 5000 }, (e2, out2) => {
+          const cwds = new Map();
+          let cur = null;
+          for (const line of String(out2 || '').split('\n')) {
+            if (line.startsWith('p')) cur = line.slice(1);
+            else if (line.startsWith('n') && cur) cwds.set(cur, line.slice(1));
+          }
+          for (const p of procs) {
+            p.cwd = cwds.get(p.pid) || null;
+            p.children = childCount.get(p.pid) || 0;
+          }
+          resolve(procs);
+        });
     });
   });
 }

@@ -171,6 +171,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-state', () => collector.getState());
   ipcMain.handle('focus-session', (_e, key) => collector.focusSession(key));
+  ipcMain.handle('refresh', () => collector.refreshAll());
   ipcMain.handle('get-settings', () => settings);
   ipcMain.on('set-settings', (_e, patch) => updateSettings(patch));
   ipcMain.on('return-focus', () => returnFocus());

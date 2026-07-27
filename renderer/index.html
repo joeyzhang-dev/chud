@@ -36,14 +36,18 @@
     padding: 2px 7px; border-radius: 8px;
   }
   header .spacer { flex: 1; }
-  header .close, header .gear {
+  header .close, header .gear, header .refresh {
     -webkit-app-region: no-drag;
     cursor: pointer; color: #666; font-size: 13px;
     width: 20px; height: 20px; line-height: 20px; text-align: center;
     border-radius: 6px;
   }
   header .close:hover { background: rgba(255,80,80,0.2); color: #ff7070; }
-  header .gear:hover, header .gear.active { background: rgba(255,255,255,0.12); color: #d0d4e0; }
+  header .gear:hover, header .gear.active,
+  header .refresh:hover { background: rgba(255,255,255,0.12); color: #d0d4e0; }
+  header .refresh.spin { animation: spin 0.6s linear; color: #60a5fa; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .badge.live { background: rgba(74,222,128,0.18); color: #7dd3a8; }
   #settings {
     flex-shrink: 0;
     padding: 4px 14px 10px;
@@ -160,6 +164,7 @@
     <span class="title">⚡ chud</span>
     <span class="count" id="count">0</span>
     <span class="spacer"></span>
+    <span class="refresh" id="refresh" title="Re-scan all sessions">⟳</span>
     <span class="gear" id="gear" title="Settings">⚙</span>
     <span class="close" id="close">✕</span>
   </header>
