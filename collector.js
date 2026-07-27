@@ -50,8 +50,12 @@ class Collector {
     this.startServer();
     this.scanClaude();
     this.pollCopilot();
+    this.refreshCmux();
+    this.pollPorts();
     setInterval(() => this.scanClaude(), 5000);
     setInterval(() => this.pollCopilot(), 5000);
+    setInterval(() => this.refreshCmux(), 4000);
+    setInterval(() => this.pollPorts(), 5000);
     setInterval(() => this.emit(), 10000); // refresh relative times
   }
 
@@ -109,6 +113,9 @@ class Collector {
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end(result);
         });
+      } else if (req.method === 'GET' && req.url.startsWith('/state')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(this.getState(), null, 2));
       } else if (req.method === 'GET' && req.url.startsWith('/surfaces')) {
         this.cmuxSurfaces().then((s) => {
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -148,6 +155,12 @@ class Collector {
     if (data.cmuxSurface) focus.cmuxSurface = data.cmuxSurface;
     if (data.bundle) focus.bundle = data.bundle;
     if (data.termProgram) focus.termProgram = data.termProgram;
+    // cmux names each tab's CLI shim dir after that tab's surface UUID, so
+    // $PATH identifies the exact tab even when CMUX_SURFACE_ID is unset.
+    const shim = shimSurfaceId(data.path);
+    if (shim) focus.cmuxShim = shim;
+    // Controlling tty, matched against `tty=ttysNNN` in `cmux tree`.
+    if (data.tty) focus.tty = String(data.tty).replace(/^\/dev\//, '');
     const existing = this.sessions.get(key) || {};
     this.sessions.set(key, { ...existing, key, focus: { ...existing.focus, ...focus } });
   }
@@ -166,11 +179,7 @@ class Collector {
 
     // Locate the surface in cmux's CURRENT tree (handles moved tabs/workspaces).
     const surfaces = await this.cmuxSurfaces();
-    let target = null;
-    if (s.focus?.cmuxSurface) {
-      target = surfaces.find((x) => x.uuid === s.focus.cmuxSurface) || null;
-    }
-    if (!target) target = matchSurfaceByTitle(surfaces, s);
+    const target = this.resolveSurface(s, surfaces);
 
     if (target) {
       // Full navigation: window -> workspace -> pane/tab. focus-panel only
@@ -198,7 +207,9 @@ class Collector {
     return 'activated cmux (no precise match)';
   }
 
-  // Parse `cmux tree --all` into a flat surface list with full context
+  // Parse `cmux tree --all` into a flat surface list with full context.
+  // A "surface" is a tab; a pane may hold several, so we also record the
+  // pane's tab siblings to disambiguate names like "chud" vs "discord bot + crm".
   async cmuxSurfaces() {
     const out = await run(CMUX_BIN, ['tree', '--all', '--id-format', 'both']);
     if (!out) return [];
@@ -206,26 +217,115 @@ class Collector {
     const surfaces = [];
     let windowUuid = null;
     let workspaceUuid = null;
+    let workspaceTitle = null;
     let paneUuid = null;
     for (const line of out.split('\n')) {
       let m;
       if ((m = line.match(new RegExp(`window window:\\d+ ${UUID}`)))) {
         windowUuid = m[1];
-      } else if ((m = line.match(new RegExp(`workspace workspace:\\d+ ${UUID}`)))) {
+      } else if ((m = line.match(new RegExp(`workspace workspace:\\d+ ${UUID}(?: "([^"]*)")?`)))) {
         workspaceUuid = m[1];
+        workspaceTitle = m[2] || null;
       } else if ((m = line.match(new RegExp(`pane pane:\\d+ ${UUID}`)))) {
         paneUuid = m[1];
-      } else if ((m = line.match(new RegExp(`surface surface:\\d+ ${UUID} \\[terminal\\] "([^"]*)"`)))) {
+      } else if ((m = line.match(new RegExp(`surface surface:\\d+ ${UUID} \\[(terminal|browser)\\] "([^"]*)"`)))) {
+        const tty = (line.match(/\btty=(\S+)/) || [])[1] || null;
         surfaces.push({
           uuid: m[1],
-          title: m[2].toLowerCase(),
+          type: m[2],
+          title: m[3],                    // original case, for display
+          match: m[3].toLowerCase(),      // folded, for heuristic matching
+          selected: / \[selected\]/.test(line),
+          tty,
           windowUuid,
           workspaceUuid,
+          workspaceTitle,
           paneUuid,
         });
       }
     }
+    // Count tabs per pane so the UI can tell when a name is one of several.
+    const perPane = new Map();
+    for (const s of surfaces) perPane.set(s.paneUuid, (perPane.get(s.paneUuid) || 0) + 1);
+    for (const s of surfaces) s.paneTabs = perPane.get(s.paneUuid) || 1;
     return surfaces;
+  }
+
+  // Resolve which cmux tab a session lives in, strongest signal first.
+  resolveSurface(s, surfaces) {
+    if (!surfaces.length) return null;
+    const term = surfaces.filter((x) => x.type === 'terminal');
+    const byUuid = (id) => (id ? term.find((x) => x.uuid.toLowerCase() === String(id).toLowerCase()) : null);
+    // tty is only trustworthy when the session really is hosted by cmux —
+    // otherwise a stale value can collide with an unrelated tab.
+    const inCmux = s.focus?.bundle === 'com.cmuxterm.app' || !!s.focus?.cmuxShim;
+    const byTty = inCmux && s.focus?.tty ? term.find((x) => x.tty === s.focus.tty) : null;
+    return (
+      byUuid(s.focus?.cmuxSurface) ||   // explicit env var (usually unset)
+      byUuid(s.focus?.cmuxShim) ||      // $PATH shim dir — exact, always present in cmux
+      byTty ||                          // controlling tty
+      matchSurfaceByTitle(term, s) ||   // title/cwd heuristic
+      null
+    );
+  }
+
+  // Attach live cmux tab names to sessions.
+  async refreshCmux() {
+    const surfaces = await this.cmuxSurfaces().catch(() => []);
+    if (!surfaces.length) return;
+    this.surfaces = surfaces;
+    let changed = false;
+    for (const [key, s] of this.sessions) {
+      let hit = null;
+      try { hit = this.resolveSurface(s, surfaces); } catch { /* skip this session */ }
+      const tab = hit ? hit.title : null;
+      const ws = hit ? hit.workspaceTitle : null;
+      const siblings = hit ? hit.paneTabs : 0;
+      if (s.tabTitle !== tab || s.workspaceTitle !== ws || s.paneTabs !== siblings) {
+        this.sessions.set(key, {
+          ...s, tabTitle: tab, workspaceTitle: ws, paneTabs: siblings, cmux: !!hit,
+        });
+        changed = true;
+      }
+    }
+    if (changed) this.emit();
+  }
+
+  // ---------- listening ports, attributed to sessions by cwd ----------
+
+  async pollPorts() {
+    const roots = [...this.sessions.values()].map((s) => s.cwd).filter(Boolean);
+    if (!roots.length) return;
+    const listeners = await listeningProcesses();
+
+    const byKey = new Map();
+    for (const l of listeners) {
+      if (!l.cwd) continue;
+      // Longest matching session cwd wins, so a nested repo beats its parent.
+      let best = null;
+      for (const [key, s] of this.sessions) {
+        if (!s.cwd) continue;
+        if (l.cwd === s.cwd || l.cwd.startsWith(s.cwd + '/')) {
+          if (!best || s.cwd.length > best.cwd.length) best = { key, cwd: s.cwd };
+        }
+      }
+      if (!best) continue;
+      const arr = byKey.get(best.key) || [];
+      if (!arr.some((p) => p.port === l.port)) arr.push({ port: l.port, cmd: l.cmd });
+      byKey.set(best.key, arr);
+    }
+
+    let changed = false;
+    for (const [key, s] of this.sessions) {
+      const ports = (byKey.get(key) || []).sort((a, b) => a.port - b.port);
+      const before = JSON.stringify(s.ports || []);
+      const after = JSON.stringify(ports);
+      if (before !== after) {
+        this.sessions.set(key, { ...s, ports });
+        changed = true;
+      }
+    }
+    if (changed) this.emit();
   }
 
   handleHookEvent(ev) {
@@ -375,6 +475,53 @@ class Collector {
   }
 }
 
+// cmux puts a per-tab shim dir on $PATH named after that tab's surface UUID:
+//   /var/folders/.../cmux-cli-shims/29BD329A-E396-46B2-85FB-F60522A2ECFA
+function shimSurfaceId(pathEnv) {
+  if (!pathEnv) return null;
+  const m = String(pathEnv).match(/cmux-cli-shims\/([0-9A-Fa-f-]{36})/);
+  return m ? m[1] : null;
+}
+
+// Every process LISTENing on TCP, with its cwd (used to attribute the port to
+// a session) and command name. Dev servers detach from the tty, so cwd is the
+// only reliable link back to the project.
+function listeningProcesses() {
+  return new Promise((resolve) => {
+    execFile('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN'], { timeout: 5000 }, (err, stdout) => {
+      if (err && !stdout) return resolve([]);
+      const byPid = new Map();
+      for (const line of String(stdout).split('\n').slice(1)) {
+        const f = line.trim().split(/\s+/);
+        if (f.length < 9) continue;
+        const pid = f[1];
+        const port = parseInt(String(f[8]).split(':').pop(), 10);
+        if (!pid || !Number.isFinite(port)) continue;
+        const entry = byPid.get(pid) || { pid, cmd: f[0], ports: new Set() };
+        entry.ports.add(port);
+        byPid.set(pid, entry);
+      }
+      const pids = [...byPid.keys()];
+      if (!pids.length) return resolve([]);
+      // One batched lsof for all cwds rather than one call per pid.
+      execFile('lsof', ['-a', '-d', 'cwd', '-p', pids.join(','), '-Fn'], { timeout: 5000 }, (e2, out2) => {
+        const cwds = new Map();
+        let cur = null;
+        for (const line of String(out2 || '').split('\n')) {
+          if (line.startsWith('p')) cur = line.slice(1);
+          else if (line.startsWith('n') && cur) cwds.set(cur, line.slice(1));
+        }
+        const rows = [];
+        for (const e of byPid.values()) {
+          const cwd = cwds.get(e.pid) || null;
+          for (const port of e.ports) rows.push({ pid: e.pid, port, cmd: e.cmd, cwd });
+        }
+        resolve(rows);
+      });
+    });
+  });
+}
+
 // Chat title + client type live in the per-session workspace.yaml
 function copilotSessionMeta(id) {
   try {
@@ -394,12 +541,13 @@ function matchSurfaceByTitle(surfaces, s) {
   if (s.summary) needles.push(s.summary.toLowerCase().slice(0, 40));
   if (s.lastPrompt) needles.push(s.lastPrompt.toLowerCase().slice(0, 40));
   for (const n of needles) {
-    const hit = surfaces.find((x) => n.length > 8 && x.title.includes(n));
+    const hit = surfaces.find((x) => n.length > 8 && x.match.includes(n));
     if (hit) return hit;
   }
-  const proj = s.cwd ? s.cwd.split('/').filter(Boolean).pop().toLowerCase() : null;
+  // `pop()` is undefined for cwd "/" — guard before folding case.
+  const proj = (s.cwd ? s.cwd.split('/').filter(Boolean).pop() : '')?.toLowerCase() || null;
   if (proj) {
-    const hit = surfaces.find((x) => x.title.includes('/' + proj) || x.title.endsWith(proj));
+    const hit = surfaces.find((x) => x.match.includes('/' + proj) || x.match.endsWith(proj));
     if (hit) return hit;
   }
   return null;

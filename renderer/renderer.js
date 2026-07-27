@@ -26,33 +26,89 @@ function projectName(s) {
   return s.cwd.split('/').filter(Boolean).pop() || s.cwd;
 }
 
+// The cmux tab name is what the user actually recognises ("chud",
+// "discord bot + crm"); fall back to the project folder off-cmux.
+function displayName(s) {
+  return s.tabTitle || projectName(s);
+}
+
+// Keep the repo visible when the tab was renamed to something else.
+function contextLabel(s) {
+  const proj = projectName(s);
+  if (!s.tabTitle) return null;
+  return s.tabTitle.toLowerCase().includes(proj.toLowerCase()) ? null : proj;
+}
+
+// Sessions you're still working on: anything live right now, plus anything
+// touched recently — an IDLE session from 20 minutes ago is still "current",
+// it just isn't mid-turn. Only genuinely stale ones go behind the toggle.
+const RECENT_MS = 60 * 60 * 1000;
+const isCurrent = (s) =>
+  s.status === 'working' ||
+  s.status === 'needs-input' ||
+  (s.status !== 'ended' && Date.now() - s.lastActivity < RECENT_MS);
+let showIdle = false;
+
+function cardHtml(s) {
+  const note = s.status === 'needs-input' && s.note ? ` · ${esc(s.note)}` : '';
+  const branch = s.branch ? ` <span class="branch">⎇ ${esc(s.branch)}</span>` : '';
+  const ctx = contextLabel(s);
+  const tabs = s.paneTabs > 1 ? `<span class="tabs" title="one of ${s.paneTabs} tabs in this pane">⧉${s.paneTabs}</span>` : '';
+  const ports = (s.ports || []).length
+    ? `<div class="ports">${s.ports.map((p) =>
+        `<span class="port" data-port="${p.port}" title="Open http://localhost:${p.port} — ${esc(p.cmd)}">:${p.port}</span>`
+      ).join('')}</div>`
+    : '';
+  return `
+    <div class="card ${s.status}" data-key="${esc(s.key)}" title="Click to jump to this session">
+      <div class="row">
+        <span class="dot ${s.status}"></span>
+        <span class="name">${esc(displayName(s))}</span>
+        ${tabs}
+        <span class="badge ${s.source}">${s.source === 'claude' ? 'CLAUDE' : 'COPILOT'}</span>
+        <span class="time">${timeAgo(s.lastActivity)}</span>
+      </div>
+      ${ctx ? `<div class="ctx">${esc(ctx)}</div>` : ''}
+      <div class="status-line ${s.status}">${STATUS_LABEL[s.status] || s.status}${note}${branch}</div>
+      ${ports}
+      ${s.title || s.lastPrompt ? `<div class="prompt">${esc(s.title || s.lastPrompt)}</div>` : ''}
+      ${s.lastReply && s.status !== 'working' ? `<div class="reply">${esc(s.lastReply)}</div>` : ''}
+    </div>`;
+}
+
 function render() {
   const list = document.getElementById('list');
   const sessions = state.sessions || [];
-  const active = sessions.filter((s) => s.status === 'working' || s.status === 'needs-input').length;
-  document.getElementById('count').textContent = `${active} active · ${sessions.length}`;
+  const active = sessions.filter(isCurrent);
+  const idle = sessions.filter((s) => !isCurrent(s));
+  const live = sessions.filter((s) => s.status === 'working' || s.status === 'needs-input').length;
+  document.getElementById('count').textContent = `${live} active · ${sessions.length}`;
 
   if (!sessions.length) {
     list.innerHTML = '<div class="empty">No recent sessions.<br>Start a Claude Code or Copilot session and it will appear here.</div>';
     return;
   }
 
-  list.innerHTML = sessions.map((s) => {
-    const note = s.status === 'needs-input' && s.note ? ` · ${esc(s.note)}` : '';
-    const branch = s.branch ? ` <span class="branch">⎇ ${esc(s.branch)}</span>` : '';
-    return `
-    <div class="card ${s.status}" data-key="${esc(s.key)}" title="Click to jump to this session">
-      <div class="row">
-        <span class="dot ${s.status}"></span>
-        <span class="name">${esc(projectName(s))}</span>
-        <span class="badge ${s.source}">${s.source === 'claude' ? 'CLAUDE' : 'COPILOT'}</span>
-        <span class="time">${timeAgo(s.lastActivity)}</span>
-      </div>
-      <div class="status-line ${s.status}">${STATUS_LABEL[s.status] || s.status}${note}${branch}</div>
-      ${s.title || s.lastPrompt ? `<div class="prompt">${esc(s.title || s.lastPrompt)}</div>` : ''}
-      ${s.lastReply && s.status !== 'working' ? `<div class="reply">${esc(s.lastReply)}</div>` : ''}
-    </div>`;
-  }).join('');
+  const activeHtml = active.length
+    ? active.map(cardHtml).join('')
+    : '<div class="empty quiet">Nothing active or recent.</div>';
+
+  const toggle = idle.length
+    ? `<button class="toggle ${showIdle ? 'open' : ''}" id="toggle-idle">
+         <span class="chev">${showIdle ? '▾' : '▸'}</span>
+         ${showIdle ? 'Hide' : 'Show'} ${idle.length} older
+       </button>`
+    : '';
+
+  list.innerHTML = activeHtml + toggle + (showIdle ? idle.map(cardHtml).join('') : '');
+
+  const btn = document.getElementById('toggle-idle');
+  if (btn) btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showIdle = !showIdle;
+    sel = -1;
+    render();
+  });
   applySel();
 }
 
@@ -214,6 +270,13 @@ window.hud.onState((s) => { state = s; render(); });
 window.hud.getState().then((s) => { state = s; render(); });
 document.getElementById('close').addEventListener('click', () => window.hud.close());
 document.getElementById('list').addEventListener('click', (e) => {
+  // Port chips open the browser instead of jumping to the session.
+  const chip = e.target.closest('.port');
+  if (chip) {
+    e.stopPropagation();
+    window.hud.openPort(chip.dataset.port);
+    return;
+  }
   const card = e.target.closest('.card');
   if (!card || !card.dataset.key) return;
   card.classList.add('clicked');

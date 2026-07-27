@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -177,6 +177,10 @@ app.whenReady().then(() => {
   ipcMain.on('suspend-hotkey', () => globalShortcut.unregisterAll());
   ipcMain.on('resume-hotkey', () => registerHotkeys());
   ipcMain.on('close-window', () => win.close());
+  ipcMain.on('open-port', (_e, port) => {
+    const n = Number(port);
+    if (Number.isInteger(n) && n > 0 && n < 65536) shell.openExternal(`http://localhost:${n}`);
+  });
 
   const r = registerHotkeys();
   if (!r.okFocus || !r.okToggle) {

@@ -125,6 +125,33 @@
   .reply { color: #8f95a5; -webkit-line-clamp: 3; }
   .reply::before { content: "✓ "; color: #4ade80; opacity: 0.7; }
   .empty { text-align: center; color: #565b6b; padding: 30px 10px; line-height: 1.6; }
+  .empty.quiet { padding: 16px 10px; font-size: 11px; }
+  /* repo name, shown when the cmux tab was renamed to something else */
+  .ctx { margin-top: 2px; color: #6f7488; font-size: 10px; }
+  .ctx::before { content: "▸ "; opacity: 0.7; }
+  /* one-of-N tabs in the same pane */
+  .tabs { font-size: 9px; color: #7c8194; background: rgba(255,255,255,0.07);
+          padding: 1px 4px; border-radius: 4px; flex-shrink: 0; }
+  /* live localhost ports owned by this session */
+  .ports { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .port {
+    font-size: 10px; font-variant-numeric: tabular-nums; font-weight: 600;
+    color: #7dd3a8; background: rgba(74,222,128,0.13);
+    border: 1px solid rgba(74,222,128,0.28);
+    padding: 1px 6px; border-radius: 5px; cursor: pointer;
+  }
+  .port:hover { background: rgba(74,222,128,0.26); color: #b6f0cf; }
+  .port::before { content: "localhost"; opacity: 0.65; font-weight: 400; }
+  /* show/hide inactive sessions */
+  .toggle {
+    display: flex; align-items: center; gap: 6px; width: 100%;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07);
+    color: #8f95a5; font-family: inherit; font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.3px; padding: 5px 10px; border-radius: 8px;
+    margin: 2px 0 6px; cursor: pointer;
+  }
+  .toggle:hover { background: rgba(255,255,255,0.09); color: #d0d4e0; }
+  .toggle .chev { font-size: 9px; }
 </style>
 </head>
 <body>

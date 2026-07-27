@@ -12,5 +12,6 @@ contextBridge.exposeInMainWorld('hud', {
   suspendHotkey: () => ipcRenderer.send('suspend-hotkey'),
   resumeHotkey: () => ipcRenderer.send('resume-hotkey'),
   onState: (cb) => ipcRenderer.on('state', (_e, state) => cb(state)),
+  openPort: (port) => ipcRenderer.send('open-port', port),
   close: () => ipcRenderer.send('close-window'),
 });
