@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: transparent; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 12px;
+    color: #e8e8ee;
+    -webkit-user-select: none;
+    overflow: hidden;
+  }
+  #app {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: rgba(18, 18, 26, 0.94);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  header {
+    -webkit-app-region: drag;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px 8px;
+    flex-shrink: 0;
+  }
+  header .title {
+    font-weight: 600; font-size: 12px; letter-spacing: 0.3px;
+    min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  header .spacer { flex: 1; }
+  header .close {
+    -webkit-app-region: no-drag;
+    cursor: pointer; color: #666; font-size: 13px;
+    width: 20px; height: 20px; line-height: 20px; text-align: center;
+    border-radius: 6px;
+  }
+  header .close:hover { background: rgba(255,80,80,0.2); color: #ff7070; }
+  .badge {
+    font-size: 8.5px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 1.5px 5px; border-radius: 4px; flex-shrink: 0;
+  }
+  .badge.live {
+    background: rgba(74,222,128,0.13); color: #7dd3a8;
+    border: 1px solid rgba(74,222,128,0.28);
+  }
+
+  /* terminal pane */
+  #pane {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+  #pane.focused { box-shadow: inset 0 0 0 1px rgba(96,165,250,0.22); }
+  #term {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 10px;
+    outline: none;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11.5px;
+    line-height: 1.35;
+    color: #d8dae2;
+    background: transparent;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    tab-size: 8;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  #term::-webkit-scrollbar { width: 4px; }
+  #term::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+  #term.faded { opacity: 0; }
+  #msg {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #565b6b;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+    pointer-events: none;
+  }
+  #msg.hidden { display: none; }
+
+  footer {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px 6px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    color: #565b6b;
+    font-size: 10px;
+    letter-spacing: 0.2px;
+  }
+  footer .spacer { flex: 1; }
+  footer .nudge { color: #6f7488; }
+  footer .nudge.hidden { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span class="title" id="title">⧉ session</span>
+    <span class="badge live">LIVE MIRROR</span>
+    <span class="spacer"></span>
+    <span class="close" id="close" title="Close mirror">✕</span>
+  </header>
+  <div id="pane">
+    <div id="term" tabindex="0"></div>
+    <div id="msg" class="hidden">session unreachable</div>
+  </div>
+  <footer>
+    <span>keys are sent to the live session · esc closes</span>
+    <span class="spacer"></span>
+    <span class="nudge hidden" id="focus-hint">click to type</span>
+  </footer>
+</div>
+<script src="mirror.js"></script>
+</body>
+</html>

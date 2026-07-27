@@ -131,6 +131,7 @@ function applySettingsUI(s) {
   $('compact').checked = !!s.compact;
   $('app').classList.toggle('compact', !!s.compact);
   $('follow').checked = !!s.followDisplay;
+  $('mirror-click').checked = s.mirrorOnClick !== false;
   $('done-sound').checked = !!s.doneSound;
   $('done-vol').value = s.doneSoundVolume ?? 1;
   $('done-vol-v').textContent = Math.round((s.doneSoundVolume ?? 1) * 100) + '%';
@@ -168,6 +169,9 @@ $('compact').addEventListener('change', (e) => {
 });
 $('follow').addEventListener('change', (e) => {
   window.hud.setSettings({ followDisplay: e.target.checked });
+});
+$('mirror-click').addEventListener('change', (e) => {
+  window.hud.setSettings({ mirrorOnClick: e.target.checked });
 });
 $('done-sound').addEventListener('change', (e) => {
   window.hud.setSettings({ doneSound: e.target.checked });
@@ -330,7 +334,8 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Enter' && sel >= 0) {
     e.preventDefault();
     const card = document.querySelectorAll('.card')[sel];
-    if (card?.dataset.key) window.hud.focusSession(card.dataset.key);
+    const k = card?.dataset.key;
+    if (k) (lastSettings.mirrorOnClick !== false ? window.hud.openMirror(k) : window.hud.focusSession(k));
     sel = -1; applySel();
   } else if (e.key === 'Escape') {
     e.preventDefault();
@@ -359,6 +364,7 @@ document.getElementById('list').addEventListener('click', (e) => {
   if (!card || !card.dataset.key) return;
   card.classList.add('clicked');
   setTimeout(() => card.classList.remove('clicked'), 400);
-  window.hud.focusSession(card.dataset.key);
+  const k = card.dataset.key;
+  (lastSettings.mirrorOnClick !== false ? window.hud.openMirror(k) : window.hud.focusSession(k));
 });
 setInterval(render, 15000);

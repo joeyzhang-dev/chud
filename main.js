@@ -7,7 +7,7 @@ const { Collector } = require('./collector');
 let win;
 let collector;
 
-const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', toggleHotkey: 'Control+Shift+H', followDisplay: true, doneSound: true, doneSoundDir: '/Users/joey/Downloads/claude sfx', doneSoundVolume: 1 };
+const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', toggleHotkey: 'Control+Shift+H', followDisplay: true, doneSound: true, doneSoundDir: '/Users/joey/Downloads/claude sfx', doneSoundVolume: 1, mirrorOnClick: true };
 
 // Random sound from the configured folder when any session finishes a turn.
 // Lives here (not in per-agent hooks) so Copilot sessions get it too.
@@ -223,6 +223,23 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-state', () => collector.getState());
   ipcMain.handle('focus-session', (_e, key) => collector.focusSession(key));
+  // Live mirror of the session's cmux tab. Falls back to plain focus whenever
+  // the surface can't be resolved or the mirror module isn't present.
+  ipcMain.handle('open-mirror', async (_e, key) => {
+    const s = collector.sessions.get(key);
+    if (!s) return 'unknown session';
+    const surfaces = collector.surfaces || [];
+    const uuid = s.surfaceUuid || s.focus?.cmuxShim || s.procShim;
+    const surf = surfaces.find((x) => x.uuid === uuid);
+    if (!surf) return collector.focusSession(key);
+    try {
+      const { openMirror } = require('./mirror-main');
+      openMirror({ uuid: surf.uuid, workspaceUuid: surf.workspaceUuid, title: surf.title });
+      return 'mirror opened';
+    } catch (e) {
+      return collector.focusSession(key);
+    }
+  });
   ipcMain.handle('refresh', () => collector.refreshAll());
   ipcMain.on('preview-sound', (_e, v) => {
     const vol = Math.min(1, Math.max(0, Number(v) || 0));
