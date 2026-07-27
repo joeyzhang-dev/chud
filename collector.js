@@ -477,6 +477,9 @@ class Collector {
           ...s, screenWorking: val,
           ...(stamp ? { lastActivity: Date.now() } : {}),
         });
+        // Turn finished on a session without hooks (Copilot) — hook-driven
+        // sessions already fire on their Stop event.
+        if (!val && s.screenWorking === true && !s.hookDriven && this.onFinished) this.onFinished(key);
         changed = true;
       }
     }
@@ -630,6 +633,7 @@ class Collector {
         break;
       case 'Stop':
         this.upsert(key, { ...base, status: 'idle', note: null });
+        if (this.onFinished) this.onFinished(key);
         if (ev.transcript_path) {
           this.enrichFromTranscript(key, ev.transcript_path);
         }

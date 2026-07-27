@@ -7,7 +7,21 @@ const { Collector } = require('./collector');
 let win;
 let collector;
 
-const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', toggleHotkey: 'Control+Shift+H', followDisplay: true };
+const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', toggleHotkey: 'Control+Shift+H', followDisplay: true, doneSound: true, doneSoundDir: '/Users/joey/Downloads/claude sfx' };
+
+// Random sound from the configured folder when any session finishes a turn.
+// Lives here (not in per-agent hooks) so Copilot sessions get it too.
+let lastSoundAt = 0;
+function playDoneSound() {
+  if (!settings.doneSound || !settings.doneSoundDir) return;
+  if (Date.now() - lastSoundAt < 2000) return; // several finishes at once = one sound
+  try {
+    const files = fs.readdirSync(settings.doneSoundDir).filter((f) => /\.(mp3|wav|m4a|aiff|ogg)$/i.test(f));
+    if (!files.length) return;
+    lastSoundAt = Date.now();
+    execFile('afplay', [path.join(settings.doneSoundDir, files[Math.floor(Math.random() * files.length)])], () => {});
+  } catch { /* folder missing - silent */ }
+}
 
 // Hop to whichever display the cursor is on, keeping the window's relative
 // position. Skipped while the HUD is focused so it never fights the user.
@@ -173,6 +187,7 @@ app.whenReady().then(() => {
   collector.start();
 
   collector.onSettingsDebug = (patch) => updateSettings(patch);
+  collector.onFinished = () => playDoneSound();
 
   ipcMain.handle('get-state', () => collector.getState());
   ipcMain.handle('focus-session', (_e, key) => collector.focusSession(key));

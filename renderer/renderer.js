@@ -130,6 +130,8 @@ function applySettingsUI(s) {
   $('compact').checked = !!s.compact;
   $('app').classList.toggle('compact', !!s.compact);
   $('follow').checked = !!s.followDisplay;
+  $('done-sound').checked = !!s.doneSound;
+  if (document.activeElement !== $('done-sound-dir')) $('done-sound-dir').value = s.doneSoundDir || '';
   const sym = { Command: '⌘', Control: '⌃', Alt: '⌥', Shift: '⇧' };
   const pretty = (acc) => (acc || '').split('+').map((p) => sym[p] || p).join(' ');
   if (document.activeElement !== $('hotkey')) $('hotkey').value = pretty(s.hotkey);
@@ -163,6 +165,12 @@ $('compact').addEventListener('change', (e) => {
 });
 $('follow').addEventListener('change', (e) => {
   window.hud.setSettings({ followDisplay: e.target.checked });
+});
+$('done-sound').addEventListener('change', (e) => {
+  window.hud.setSettings({ doneSound: e.target.checked });
+});
+$('done-sound-dir').addEventListener('change', (e) => {
+  window.hud.setSettings({ doneSoundDir: e.target.value.trim() });
 });
 
 // ---- hotkey recorder: click the field, press the combo ----
