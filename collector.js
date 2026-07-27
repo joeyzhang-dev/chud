@@ -258,16 +258,14 @@ class Collector {
     if (!surfaces.length) return null;
     const term = surfaces.filter((x) => x.type === 'terminal');
     const byUuid = (id) => (id ? term.find((x) => x.uuid.toLowerCase() === String(id).toLowerCase()) : null);
-    const inCmux = s.focus?.bundle === 'com.cmuxterm.app' || !!s.focus?.cmuxShim;
-    // tty outranks the shim: Claude Code snapshots $PATH at session start, so
-    // the cmux-cli-shims UUID still points at the tab the session STARTED in.
-    // `claude --resume` in a new tab leaves it stale, while the controlling
-    // tty always tracks where the process actually lives.
-    const byTty = inCmux && s.focus?.tty ? term.find((x) => x.tty === s.focus.tty) : null;
+    // NOTE: do NOT match on tty. The `tty=` field in `cmux tree` goes stale
+    // after agent-resume/hibernation — a surface keeps reporting the pty it
+    // was first created with, so it can name a tab the session doesn't occupy.
+    // The $PATH shim dir is the surface UUID cmux assigned this tab and has
+    // proven accurate (verified against `cmux read-screen`).
     return (
       byUuid(s.focus?.cmuxSurface) ||   // explicit env var (usually unset)
-      byTty ||                          // controlling tty — survives resume
-      byUuid(s.focus?.cmuxShim) ||      // $PATH shim dir — exact, but frozen at start
+      byUuid(s.focus?.cmuxShim) ||      // $PATH shim dir — the reliable signal
       matchSurfaceByTitle(term, s) ||   // title/cwd heuristic
       null
     );
@@ -279,14 +277,20 @@ class Collector {
   async refreshCmux() {
     const surfaces = await this.cmuxSurfaces().catch(() => []);
     if (!surfaces.length) return;
-    const agents = await ttyAgents().catch(() => new Map());
-    for (const x of surfaces) x.agent = x.tty ? agents.get(x.tty) || null : null;
     this.surfaces = surfaces;
+
+    // Liveness is computed from running agent processes by cwd, deliberately
+    // WITHOUT going through surfaces: the tty->surface mapping is unreliable
+    // (see resolveSurface), and "is an agent running in this project right
+    // now" is the thing we actually care about for the default view.
+    const agents = await ttyAgents().catch(() => new Map());
+    const liveCwds = new Set();
+    for (const a of agents.values()) if (a.cwd) liveCwds.add(`${a.kind} ${a.cwd}`);
 
     const claimed = new Set();   // surface uuids already assigned
     const assign = new Map();    // session key -> surface
 
-    // Pass 1: direct identity (env var / tty / shim / title heuristic).
+    // One session per tab: strongest identity wins the claim.
     for (const [key, s] of this.sessions) {
       let hit = null;
       try { hit = this.resolveSurface(s, surfaces); } catch { /* skip */ }
@@ -296,25 +300,17 @@ class Collector {
       }
     }
 
-    // Pass 2: tabs still running an agent but not claimed above — mostly
-    // Copilot, which never reports its tty. Match on the agent process's cwd
-    // and give the tab to the most recently active unassigned session, so a
-    // project with many old sessions yields one card per open tab, not eight.
-    const open = surfaces.filter((x) => x.agent && !claimed.has(x.uuid));
-    for (const surf of open) {
-      let best = null;
-      for (const [key, s] of this.sessions) {
-        if (assign.has(key)) continue;
-        if (surf.agent.kind && s.source && surf.agent.kind !== s.source) continue;
-        if (!s.cwd || !surf.agent.cwd) continue;
-        if (s.cwd !== surf.agent.cwd) continue;
-        if (!best || s.lastActivity > best.s.lastActivity) best = { key, s };
-      }
-      if (best) {
-        claimed.add(surf.uuid);
-        assign.set(best.key, surf);
-      }
+    // Among sessions sharing a cwd, only the most recent counts as live, so a
+    // project with eight historical sessions yields one card, not eight.
+    const newestPerCwd = new Map();
+    for (const [key, s] of this.sessions) {
+      if (!s.cwd || !s.source) continue;
+      const k = `${s.source} ${s.cwd}`;
+      if (!liveCwds.has(k)) continue;
+      const prev = newestPerCwd.get(k);
+      if (!prev || s.lastActivity > prev.lastActivity) newestPerCwd.set(k, { key, lastActivity: s.lastActivity });
     }
+    const liveKeys = new Set([...newestPerCwd.values()].map((v) => v.key));
 
     let changed = false;
     for (const [key, s] of this.sessions) {
@@ -322,7 +318,7 @@ class Collector {
       const tab = hit ? hit.title : null;
       const ws = hit ? hit.workspaceTitle : null;
       const siblings = hit ? hit.paneTabs : 0;
-      const live = !!(hit && hit.agent);
+      const live = liveKeys.has(key);
       if (s.tabTitle !== tab || s.workspaceTitle !== ws || s.paneTabs !== siblings || s.live !== live) {
         this.sessions.set(key, {
           ...s, tabTitle: tab, workspaceTitle: ws, paneTabs: siblings, cmux: !!hit, live,
