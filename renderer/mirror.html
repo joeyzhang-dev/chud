@@ -12,11 +12,14 @@
     -webkit-user-select: none;
     overflow: hidden;
   }
+  /* Solid, never translucent: a see-through shell let whatever sat behind the
+     window bleed up through the grid as ghost text. The transparency the
+     BrowserWindow is created with now only buys the rounded corners. */
   #app {
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: rgba(18, 18, 26, 0.94);
+    background: #12121a;
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 14px;
     overflow: hidden;
@@ -55,28 +58,36 @@
     position: relative;
     flex: 1;
     min-height: 0;
+    min-width: 0;
     display: flex;
+    background: #0b0b10;
   }
-  #pane.focused { box-shadow: inset 0 0 0 1px rgba(96,165,250,0.22); }
+  #pane.focused { box-shadow: inset 0 0 0 1px rgba(96,165,250,0.28); }
   #term {
     flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
+    /* min-width:0 or a wide unwrapped grid would push the flex item past the
+       pane instead of scrolling inside it. */
+    min-width: 0;
+    overflow: auto;
     padding: 10px;
     outline: none;
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 11.5px;
-    line-height: 1.35;
+    /* Replaced on every paint by the fit-to-width pass in mirror.js. */
+    font-size: 13px;
+    line-height: 1.25;
     color: #d8dae2;
     background: transparent;
-    white-space: pre-wrap;
-    overflow-wrap: break-word;
+    /* pre, never pre-wrap: wrapping folded long rows back under themselves and
+       shredded every box-drawing TUI. The type shrinks to fit instead. */
+    white-space: pre;
     tab-size: 8;
+    font-variant-ligatures: none;
     -webkit-user-select: text;
     user-select: text;
   }
-  #term::-webkit-scrollbar { width: 4px; }
+  #term::-webkit-scrollbar { width: 4px; height: 4px; }
   #term::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+  #term::-webkit-scrollbar-corner { background: transparent; }
   #term.faded { opacity: 0; }
   #msg {
     position: absolute;
@@ -103,8 +114,8 @@
     letter-spacing: 0.2px;
   }
   footer .spacer { flex: 1; }
-  footer .nudge { color: #6f7488; }
-  footer .nudge.hidden { display: none; }
+  footer .hint { color: #6f7488; }
+  footer .hint.live { color: #6bb694; }
 </style>
 </head>
 <body>
@@ -122,7 +133,7 @@
   <footer>
     <span>keys are sent to the live session · esc closes</span>
     <span class="spacer"></span>
-    <span class="nudge hidden" id="focus-hint">click to type</span>
+    <span class="hint" id="focus-hint">click to type</span>
   </footer>
 </div>
 <script src="mirror.js"></script>

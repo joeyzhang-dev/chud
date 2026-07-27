@@ -17,6 +17,7 @@ const term = document.getElementById('term');
 const msg = document.getElementById('msg');
 const closeBtn = document.getElementById('close');
 const focusHint = document.getElementById('focus-hint');
+const headerEl = document.querySelector('header');
 
 function setTitle(t) {
   const name = String(t || '').trim() || 'session';
@@ -31,11 +32,58 @@ setTitle(initialTitle);
 // How close to the tail counts as "following along".
 const STICK_PX = 40;
 let firstPaint = true;
+let lastText = '';
 
 const nearBottom = () =>
   term.scrollHeight - term.scrollTop - term.clientHeight <= STICK_PX;
 
 const toBottom = () => { term.scrollTop = term.scrollHeight; };
+
+// cmux pads screen rows out to the terminal width. Those trailing spaces draw
+// nothing but they widen the grid, which would cost a font size step and hang a
+// scrollbar on empty air — so they come off. Leading and interior blank lines
+// are part of what the TUI drew and stay; only the dead rows below the last
+// line of content are dropped.
+function normalize(text) {
+  const lines = String(text).split('\n');
+  for (let i = 0; i < lines.length; i++) lines[i] = lines[i].replace(/[ \t\r]+$/, '');
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines.join('\n');
+}
+
+function longestLine(text) {
+  let max = 0;
+  let start = 0;
+  for (;;) {
+    const nl = text.indexOf('\n', start);
+    const len = (nl === -1 ? text.length : nl) - start;
+    if (len > max) max = len;
+    if (nl === -1) return max;
+    start = nl + 1;
+  }
+}
+
+// Advance width of the monospace stack as a fraction of the font size (~0.6),
+// plus slack so the widest row never lands a pixel past the edge.
+const CHAR_RATIO = 0.62;
+const PAD_PX = 10;    // #term's horizontal padding, per the stylesheet
+const GUTTER_PX = 6;  // scrollbar room, so it never covers the last column
+const MIN_PX = 8;
+const MAX_PX = 13;
+
+let fontPx = 0;
+
+// Wrapping is off, so the only alternative to fitting the grid across the pane
+// is a horizontal scrollbar. Shrink the type until the widest row fits.
+function fitFontSize() {
+  const cols = longestLine(lastText);
+  const avail = pane.clientWidth - PAD_PX * 2 - GUTTER_PX;
+  if (!cols || avail <= 0) return;
+  const px = Math.min(MAX_PX, Math.max(MIN_PX, Math.floor(avail / (cols * CHAR_RATIO))));
+  if (px === fontPx) return;
+  fontPx = px;
+  term.style.fontSize = `${px}px`;
+}
 
 function render(s) {
   if (!s || typeof s !== 'object') return;
@@ -53,19 +101,27 @@ function render(s) {
   msg.classList.add('hidden');
   term.classList.remove('faded');
 
-  const text = String(s.text);
-  if (!firstPaint && text === term.textContent) return;
+  const text = normalize(s.text);
+  if (!firstPaint && text === lastText) return;
 
   // Decide before mutating: only chase the tail if the user was already there.
   const stick = firstPaint || nearBottom();
+  lastText = text;
   term.textContent = text;
+  fitFontSize();
   if (stick) toBottom();
   firstPaint = false;
 }
 
 bridge.onState(render);
 
-window.addEventListener('resize', () => { if (nearBottom()) toBottom(); });
+// Resizing changes how many columns fit, so the type is re-fitted before the
+// stickiness check is applied against the new layout.
+window.addEventListener('resize', () => {
+  const stick = nearBottom();
+  fitFontSize();
+  if (stick) toBottom();
+});
 
 /* -------------------------------- closing -------------------------------- */
 
@@ -165,10 +221,13 @@ document.addEventListener('paste', (e) => {
 
 /* ------------------------------ focus state ------------------------------ */
 
+// Whether keystrokes are actually going anywhere is not something you can
+// guess by looking at the window, so the footer says it outright.
 function syncFocus() {
   const on = termFocused();
   pane.classList.toggle('focused', on);
-  focusHint.classList.toggle('hidden', on);
+  focusHint.textContent = on ? 'typing live' : 'click to type';
+  focusHint.classList.toggle('live', on);
 }
 
 term.addEventListener('focus', syncFocus);
@@ -176,5 +235,17 @@ term.addEventListener('blur', () => { flush(); syncFocus(); });
 window.addEventListener('focus', () => term.focus());
 window.addEventListener('beforeunload', flush);
 
+// A click anywhere in the window re-arms typing. Clicks inside the pane focus
+// it natively and must keep drag-selection intact, so only the chrome needs
+// help: suppress the default blur there, but leave the header alone so the
+// window can still be dragged by it.
+document.addEventListener('mousedown', (e) => {
+  if (term.contains(e.target) || closeBtn.contains(e.target)) return;
+  if (!headerEl || !headerEl.contains(e.target)) e.preventDefault();
+  term.focus();
+});
+
 term.focus();
 syncFocus();
+// The window is still being shown as this runs; take focus again once it is.
+requestAnimationFrame(() => { term.focus(); syncFocus(); });
