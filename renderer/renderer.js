@@ -42,10 +42,14 @@ function contextLabel(s) {
 // Sessions you're still working on: anything live right now, plus anything
 // touched recently — an IDLE session from 20 minutes ago is still "current",
 // it just isn't mid-turn. Only genuinely stale ones go behind the toggle.
+// `live` means the session's cmux tab is still open with its agent running —
+// that outranks age entirely. Only sessions whose tab is gone fall back to a
+// recency window before being tucked behind the toggle.
 const RECENT_MS = 60 * 60 * 1000;
 const isCurrent = (s) =>
   s.status === 'working' ||
   s.status === 'needs-input' ||
+  s.live ||
   (s.status !== 'ended' && Date.now() - s.lastActivity < RECENT_MS);
 let showIdle = false;
 

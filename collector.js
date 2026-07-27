@@ -159,8 +159,10 @@ class Collector {
     // $PATH identifies the exact tab even when CMUX_SURFACE_ID is unset.
     const shim = shimSurfaceId(data.path);
     if (shim) focus.cmuxShim = shim;
-    // Controlling tty, matched against `tty=ttysNNN` in `cmux tree`.
-    if (data.tty) focus.tty = String(data.tty).replace(/^\/dev\//, '');
+    // Controlling tty, matched against `tty=ttysNNN` in `cmux tree`. Detached
+    // shells report "??" — ignore anything that isn't a real terminal.
+    const tty = String(data.tty || '').replace(/^\/dev\//, '').trim();
+    if (/^ttys\d+$/.test(tty)) focus.tty = tty;
     const existing = this.sessions.get(key) || {};
     this.sessions.set(key, { ...existing, key, focus: { ...existing.focus, ...focus } });
   }
@@ -271,21 +273,59 @@ class Collector {
     );
   }
 
-  // Attach live cmux tab names to sessions.
+  // Attach live cmux tab names to sessions, and mark the ones whose tab is
+  // still open with a running agent — those are "live" regardless of how long
+  // they've sat idle, because an idle prompt in an open tab is still your work.
   async refreshCmux() {
     const surfaces = await this.cmuxSurfaces().catch(() => []);
     if (!surfaces.length) return;
+    const agents = await ttyAgents().catch(() => new Map());
+    for (const x of surfaces) x.agent = x.tty ? agents.get(x.tty) || null : null;
     this.surfaces = surfaces;
-    let changed = false;
+
+    const claimed = new Set();   // surface uuids already assigned
+    const assign = new Map();    // session key -> surface
+
+    // Pass 1: direct identity (env var / tty / shim / title heuristic).
     for (const [key, s] of this.sessions) {
       let hit = null;
-      try { hit = this.resolveSurface(s, surfaces); } catch { /* skip this session */ }
+      try { hit = this.resolveSurface(s, surfaces); } catch { /* skip */ }
+      if (hit && !claimed.has(hit.uuid)) {
+        claimed.add(hit.uuid);
+        assign.set(key, hit);
+      }
+    }
+
+    // Pass 2: tabs still running an agent but not claimed above — mostly
+    // Copilot, which never reports its tty. Match on the agent process's cwd
+    // and give the tab to the most recently active unassigned session, so a
+    // project with many old sessions yields one card per open tab, not eight.
+    const open = surfaces.filter((x) => x.agent && !claimed.has(x.uuid));
+    for (const surf of open) {
+      let best = null;
+      for (const [key, s] of this.sessions) {
+        if (assign.has(key)) continue;
+        if (surf.agent.kind && s.source && surf.agent.kind !== s.source) continue;
+        if (!s.cwd || !surf.agent.cwd) continue;
+        if (s.cwd !== surf.agent.cwd) continue;
+        if (!best || s.lastActivity > best.s.lastActivity) best = { key, s };
+      }
+      if (best) {
+        claimed.add(surf.uuid);
+        assign.set(best.key, surf);
+      }
+    }
+
+    let changed = false;
+    for (const [key, s] of this.sessions) {
+      const hit = assign.get(key) || null;
       const tab = hit ? hit.title : null;
       const ws = hit ? hit.workspaceTitle : null;
       const siblings = hit ? hit.paneTabs : 0;
-      if (s.tabTitle !== tab || s.workspaceTitle !== ws || s.paneTabs !== siblings) {
+      const live = !!(hit && hit.agent);
+      if (s.tabTitle !== tab || s.workspaceTitle !== ws || s.paneTabs !== siblings || s.live !== live) {
         this.sessions.set(key, {
-          ...s, tabTitle: tab, workspaceTitle: ws, paneTabs: siblings, cmux: !!hit,
+          ...s, tabTitle: tab, workspaceTitle: ws, paneTabs: siblings, cmux: !!hit, live,
         });
         changed = true;
       }
@@ -475,6 +515,43 @@ class Collector {
     });
     run(['-readonly', '-json', COPILOT_DB, sql]);
   }
+}
+
+// Agent processes attached to a terminal, keyed by tty. Lets us tell which
+// cmux tabs are genuinely in use, and gives Copilot sessions (which never
+// report their tty) a cwd to match on.
+function ttyAgents() {
+  return new Promise((resolve) => {
+    execFile('ps', ['-Ao', 'pid=,tty=,args='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      if (err && !stdout) return resolve(new Map());
+      const found = new Map(); // tty -> {pid, kind}
+      for (const line of String(stdout).split('\n')) {
+        const m = line.match(/^\s*(\d+)\s+(\S+)\s+(.*)$/);
+        if (!m) continue;
+        const [, pid, ttyRaw, args] = m;
+        const tty = ttyRaw.replace(/^\/dev\//, '');
+        if (!/^ttys\d+$/.test(tty)) continue;
+        // The agent binary itself, not shells or helpers that merely mention it.
+        const kind = /(^|\/)claude(\s|$)/.test(args) ? 'claude'
+          : /(^|\/)copilot(\s|$)/.test(args) ? 'copilot'
+          : null;
+        if (!kind) continue;
+        if (!found.has(tty)) found.set(tty, { pid, kind });
+      }
+      const pids = [...found.values()].map((v) => v.pid);
+      if (!pids.length) return resolve(found);
+      execFile('lsof', ['-a', '-d', 'cwd', '-p', pids.join(','), '-Fn'], { timeout: 5000 }, (e2, out2) => {
+        const cwds = new Map();
+        let cur = null;
+        for (const line of String(out2 || '').split('\n')) {
+          if (line.startsWith('p')) cur = line.slice(1);
+          else if (line.startsWith('n') && cur) cwds.set(cur, line.slice(1));
+        }
+        for (const v of found.values()) v.cwd = cwds.get(v.pid) || null;
+        resolve(found);
+      });
+    });
+  });
 }
 
 // cmux puts a per-tab shim dir on $PATH named after that tab's surface UUID:
