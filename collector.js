@@ -558,10 +558,10 @@ class Collector {
 
   // Full re-scan: forget cached file mtimes and re-read every source.
   async refreshAll() {
+    // True reset: rebuild everything from disk and live processes, so stale
+    // in-memory state (e.g. activity bumped by a bad signal) cannot survive.
     this.fileCache.clear();
-    for (const [key, s] of [...this.sessions]) {
-      if (s.fromProcess) this.sessions.delete(key);
-    }
+    this.sessions.clear();
     this.scanClaude();
     this.pollCopilot();
     await this.pollAgents().catch(() => {});
@@ -724,6 +724,7 @@ class Collector {
     if (!fs.existsSync(COPILOT_DB)) return;
     const sql = `
       SELECT s.id, s.cwd, s.branch, s.summary, s.updated_at,
+             (SELECT MAX(t.timestamp) FROM turns t WHERE t.session_id = s.id) AS last_turn_at,
              (SELECT substr(t.user_message,1,300) FROM turns t WHERE t.session_id = s.id ORDER BY t.turn_index DESC LIMIT 1) AS last_user,
              (SELECT substr(t.assistant_response,1,400) FROM turns t WHERE t.session_id = s.id ORDER BY t.turn_index DESC LIMIT 1) AS last_assistant
       FROM sessions s
@@ -750,6 +751,11 @@ class Collector {
           && existing.lastPrompt === lastPrompt
           && existing.lastReply === lastReply
           && existing.summary === summary;
+        // Activity = the last real conversation turn. updated_at is unusable:
+        // the desktop app rewrites it for every session it merely loads.
+        const turnAt = r.last_turn_at
+          ? (Date.parse(r.last_turn_at + 'Z') || Date.parse(r.last_turn_at) || dbLast)
+          : dbLast;
         this.upsert(key, {
           source: 'copilot',
           sessionId: r.id,
@@ -762,8 +768,8 @@ class Collector {
           lastReply,
           dbLast,
           lastActivity: contentSame
-            ? (existing.lastActivity || dbLast)
-            : Math.max(dbLast, existing?.lastActivity || 0),
+            ? (existing.lastActivity || turnAt)
+            : Math.max(turnAt, existing?.lastActivity || 0),
         });
         changed = true;
       }
