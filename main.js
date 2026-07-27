@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -192,6 +192,16 @@ app.whenReady().then(() => {
   ipcMain.handle('get-state', () => collector.getState());
   ipcMain.handle('focus-session', (_e, key) => collector.focusSession(key));
   ipcMain.handle('refresh', () => collector.refreshAll());
+  ipcMain.handle('pick-sound-dir', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      title: 'Choose sound folder',
+      defaultPath: settings.doneSoundDir || app.getPath('downloads'),
+      properties: ['openDirectory'],
+    });
+    if (r.canceled || !r.filePaths[0]) return settings.doneSoundDir;
+    updateSettings({ doneSoundDir: r.filePaths[0] });
+    return r.filePaths[0];
+  });
   ipcMain.handle('get-settings', () => settings);
   ipcMain.on('set-settings', (_e, patch) => updateSettings(patch));
   ipcMain.on('return-focus', () => returnFocus());

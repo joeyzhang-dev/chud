@@ -131,7 +131,7 @@ function applySettingsUI(s) {
   $('app').classList.toggle('compact', !!s.compact);
   $('follow').checked = !!s.followDisplay;
   $('done-sound').checked = !!s.doneSound;
-  if (document.activeElement !== $('done-sound-dir')) $('done-sound-dir').value = s.doneSoundDir || '';
+  $('done-sound-dir').value = s.doneSoundDir || '';
   const sym = { Command: '⌘', Control: '⌃', Alt: '⌥', Shift: '⇧' };
   const pretty = (acc) => (acc || '').split('+').map((p) => sym[p] || p).join(' ');
   if (document.activeElement !== $('hotkey')) $('hotkey').value = pretty(s.hotkey);
@@ -169,8 +169,9 @@ $('follow').addEventListener('change', (e) => {
 $('done-sound').addEventListener('change', (e) => {
   window.hud.setSettings({ doneSound: e.target.checked });
 });
-$('done-sound-dir').addEventListener('change', (e) => {
-  window.hud.setSettings({ doneSoundDir: e.target.value.trim() });
+$('done-sound-dir').addEventListener('click', async (e) => {
+  const dir = await window.hud.pickSoundDir(); // native folder dialog; persists on pick
+  if (dir) e.target.value = dir;
 });
 
 // ---- hotkey recorder: click the field, press the combo ----

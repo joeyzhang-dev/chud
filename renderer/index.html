@@ -77,7 +77,7 @@
     font-family: inherit;
   }
   #settings input[type=text] { cursor: pointer; text-align: center; }
-  #settings input.pathbox { cursor: text; text-align: left; }
+  #settings input.pathbox { cursor: pointer; text-align: left; white-space: nowrap; text-overflow: ellipsis; }
   #settings input[type=text]:focus { border-color: rgba(96,165,250,0.7); background: rgba(96,165,250,0.10); cursor: default; }
   #settings .hint { color: #565b6b; font-size: 10px; margin-top: 6px; }
   #settings .hint.error { color: #ff7070; }
@@ -175,7 +175,7 @@
     <label><input type="checkbox" id="compact"> Compact view</label>
     <label><input type="checkbox" id="follow"> Follow active monitor</label>
     <label><input type="checkbox" id="done-sound"> Sound when a prompt finishes</label>
-    <label><span class="lbl">Sound folder</span><input type="text" id="done-sound-dir" class="pathbox" placeholder="/path/to/sounds"></label>
+    <label><span class="lbl">Sound folder</span><input type="text" id="done-sound-dir" class="pathbox" readonly placeholder="click to choose folder" title="Click to choose the sound folder"></label>
     <label><span class="lbl">Focus hotkey</span><input type="text" id="hotkey" readonly placeholder="click to record"></label>
     <label><span class="lbl">Hide/show hotkey</span><input type="text" id="toggle-hotkey" readonly placeholder="click to record"></label>
     <div class="hint" id="hotkey-hint">Press hotkey from any app · ↑↓ navigate · Enter jump · Esc back</div>
