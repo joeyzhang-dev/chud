@@ -47,6 +47,7 @@ function contextLabel(s) {
 // recency window before being tucked behind the toggle.
 const RECENT_MS = 60 * 60 * 1000;
 const isCurrent = (s) =>
+  (s.background && s.status !== 'working' && s.status !== 'needs-input') ? false :
   s.status === 'working' ||
   s.status === 'needs-input' ||
   s.live ||

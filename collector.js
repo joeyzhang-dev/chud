@@ -764,6 +764,9 @@ class Collector {
           summary,
           title: meta.title,
           client: meta.client,
+          // Desktop-app / autopilot sessions run without the user touching a
+          // terminal — keep them out of the main view unless truly working.
+          background: !!(meta.client && !/cli/i.test(meta.client)),
           lastPrompt,
           lastReply,
           dbLast,
