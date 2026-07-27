@@ -102,8 +102,12 @@ class Collector {
     if (s.screenWorking) return 'working';
     let status = s.status;
     if (!s.hookDriven) {
-      // Inferred purely from file/db recency
-      status = now - s.lastActivity < 90000 ? 'working' : 'idle';
+      // Copilot writes its DB at turn BOUNDARIES, so a fresh row means a turn
+      // just finished — done, never working. Only the screen check may claim
+      // working for it. Claude transcripts do stream mid-turn, so recency
+      // still implies working there.
+      const recent = now - s.lastActivity < 90000;
+      status = recent ? (s.source === 'copilot' ? 'done' : 'working') : 'idle';
     }
     // Screen shows a prompt: recency-inferred "working" is wrong.
     if (s.screenWorking === false && status === 'working' && !s.hookDriven) status = 'idle';
@@ -736,18 +740,30 @@ class Collector {
         // and the write would drag the card back to the stale DB time.
         if (existing && existing.dbLast === dbLast) continue;
         const meta = copilotSessionMeta(r.id);
+        const lastPrompt = cleanPrompt(r.last_user);
+        const lastReply = clean(r.last_assistant);
+        const summary = clean(r.summary);
+        // The desktop app bulk-touches updated_at on launch without any new
+        // turn content — that is not activity, or dozens of untouched
+        // sessions surge to the top as "just active".
+        const contentSame = existing
+          && existing.lastPrompt === lastPrompt
+          && existing.lastReply === lastReply
+          && existing.summary === summary;
         this.upsert(key, {
           source: 'copilot',
           sessionId: r.id,
           cwd: r.cwd,
           branch: r.branch,
-          summary: clean(r.summary),
+          summary,
           title: meta.title,
           client: meta.client,
-          lastPrompt: cleanPrompt(r.last_user),
-          lastReply: clean(r.last_assistant),
+          lastPrompt,
+          lastReply,
           dbLast,
-          lastActivity: Math.max(dbLast, existing?.lastActivity || 0),
+          lastActivity: contentSame
+            ? (existing.lastActivity || dbLast)
+            : Math.max(dbLast, existing?.lastActivity || 0),
         });
         changed = true;
       }
