@@ -467,17 +467,17 @@ class Collector {
       const val = working.get(uuid);
       for (const key of keys) {
         const s = this.sessions.get(key);
-        if (!s) continue;
-        // A screen that shows work in progress IS activity — otherwise a
-        // Copilot card ages for the whole turn (its DB froze at turn start)
-        // and reads "WORKING · 3h 27m".
-        if (val) {
-          this.sessions.set(key, { ...s, screenWorking: true, lastActivity: Date.now() });
-          changed = true;
-        } else if (s.screenWorking !== val) {
-          this.sessions.set(key, { ...s, screenWorking: false });
-          changed = true;
-        }
+        if (!s || s.screenWorking === val) continue;
+        // Stamp state TRANSITIONS only — turn started (…->true) or finished
+        // (true->false) — so the age reads "since prompted / since finished"
+        // and never ticks while running. Discovery of an already-idle tab
+        // (undefined->false) keeps its on-disk age.
+        const stamp = val || s.screenWorking === true;
+        this.sessions.set(key, {
+          ...s, screenWorking: val,
+          ...(stamp ? { lastActivity: Date.now() } : {}),
+        });
+        changed = true;
       }
     }
     if (changed) this.emit();
@@ -687,7 +687,12 @@ class Collector {
           source: 'claude',
           sessionId,
           birth: st.birthtimeMs,
-          lastActivity: Math.max(st.mtimeMs, existing?.lastActivity || 0),
+          // Hook-driven sessions are stamped at prompt/finish by the hooks;
+          // letting transcript mtime creep the time forward mid-turn made
+          // cards tick and reorder while working.
+          lastActivity: existing?.hookDriven
+            ? (existing.lastActivity || st.mtimeMs)
+            : Math.max(st.mtimeMs, existing?.lastActivity || 0),
         };
         if (!existing?.focus && this.persistedFocus[sessionId]) {
           const { ts, ...f } = this.persistedFocus[sessionId];
