@@ -44,6 +44,22 @@ class Collector {
     this.sessions = new Map(); // key: source:sessionId
     this.fileCache = new Map(); // transcript path -> mtimeMs
     this.onScreenshot = null;
+    // Hook-reported identity survives collector restarts on disk. Losing it
+    // orphaned every session (focus:null) until its next prompt.
+    this.focusFile = path.join(os.homedir(), '.config', 'chud', 'focus.json');
+    try { this.persistedFocus = JSON.parse(fs.readFileSync(this.focusFile, 'utf8')); }
+    catch { this.persistedFocus = {}; }
+  }
+
+  savePersistedFocus() {
+    try {
+      const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+      for (const [id, f] of Object.entries(this.persistedFocus)) {
+        if (!f || (f.ts || 0) < cutoff) delete this.persistedFocus[id];
+      }
+      fs.mkdirSync(path.dirname(this.focusFile), { recursive: true });
+      fs.writeFileSync(this.focusFile, JSON.stringify(this.persistedFocus));
+    } catch { /* best effort */ }
   }
 
   start() {
@@ -58,6 +74,7 @@ class Collector {
     setInterval(() => this.refreshCmux(), 4000);
     setInterval(() => this.pollPorts(), 5000);
     setInterval(() => this.pollAgents(), 3000);
+    setInterval(() => this.pollScreens(), 6000);
     setInterval(() => this.emit(), 10000); // refresh relative times
   }
 
@@ -78,11 +95,18 @@ class Collector {
   }
 
   effectiveStatus(s, now) {
+    if (s.hookDriven && s.status === 'needs-input') return 'needs-input';
+    // The tab's own status bar says a turn is in flight — believe it. This is
+    // how a Copilot session mid-turn reads as working even though its DB only
+    // updates at turn boundaries.
+    if (s.screenWorking) return 'working';
     let status = s.status;
     if (!s.hookDriven) {
       // Inferred purely from file/db recency
       status = now - s.lastActivity < 90000 ? 'working' : 'idle';
     }
+    // Screen shows a prompt: recency-inferred "working" is wrong.
+    if (s.screenWorking === false && status === 'working' && !s.hookDriven) status = 'idle';
     // A "working" session silent for 30+ min probably finished without us seeing it
     if (status === 'working' && now - s.lastActivity > 30 * 60 * 1000) status = 'idle';
     if (status === 'idle' && now - s.lastActivity < 10 * 60 * 1000) status = 'done';
@@ -183,7 +207,10 @@ class Collector {
     const tty = String(data.tty || '').replace(/^\/dev\//, '').trim();
     if (/^ttys\d+$/.test(tty)) focus.tty = tty;
     const existing = this.sessions.get(key) || {};
-    this.sessions.set(key, { ...existing, key, focus: { ...existing.focus, ...focus } });
+    const merged = { ...existing.focus, ...focus };
+    this.sessions.set(key, { ...existing, key, focus: merged });
+    this.persistedFocus[data.session_id] = { ...merged, ts: Date.now() };
+    this.savePersistedFocus();
   }
 
   // Bring the terminal/app hosting this session to the front
@@ -199,8 +226,10 @@ class Collector {
     }
 
     // Locate the surface in cmux's CURRENT tree (handles moved tabs/workspaces).
+    // The card's displayed tab is authoritative: clicking goes where it says.
     const surfaces = await this.cmuxSurfaces();
-    const target = this.resolveSurface(s, surfaces);
+    const target = (s.surfaceUuid && surfaces.find((x) => x.uuid === s.surfaceUuid))
+      || this.resolveSurface(s, surfaces);
 
     if (target) {
       // Full navigation: window -> workspace -> pane/tab. focus-panel only
@@ -276,16 +305,19 @@ class Collector {
   resolveSurface(s, surfaces) {
     if (!surfaces.length) return null;
     const term = surfaces.filter((x) => x.type === 'terminal');
+    return this.resolveExact(s, term) || matchSurfaceByTitle(term, s) || null;
+  }
+
+  // Exact identity only. NOTE: never match on tty — `cmux tree` reports the
+  // pty a surface was created with, which goes stale after agent-resume.
+  // Shims (the per-tab dir cmux puts on PATH) are verified accurate against
+  // `cmux read-screen`.
+  resolveExact(s, term) {
     const byUuid = (id) => (id ? term.find((x) => x.uuid.toLowerCase() === String(id).toLowerCase()) : null);
-    // NOTE: do NOT match on tty. The `tty=` field in `cmux tree` goes stale
-    // after agent-resume/hibernation — a surface keeps reporting the pty it
-    // was first created with, so it can name a tab the session doesn't occupy.
-    // The $PATH shim dir is the surface UUID cmux assigned this tab and has
-    // proven accurate (verified against `cmux read-screen`).
     return (
       byUuid(s.focus?.cmuxSurface) ||   // explicit env var (usually unset)
-      byUuid(s.focus?.cmuxShim) ||      // $PATH shim dir — the reliable signal
-      matchSurfaceByTitle(term, s) ||   // title/cwd heuristic
+      byUuid(s.focus?.cmuxShim) ||      // hook-reported $PATH shim
+      byUuid(s.procShim) ||             // shim read from the live process env
       null
     );
   }
@@ -298,17 +330,24 @@ class Collector {
     if (!surfaces.length) return;
     this.surfaces = surfaces;
 
+    const term = surfaces.filter((x) => x.type === 'terminal');
     const claimed = new Set();   // surface uuids already assigned
     const assign = new Map();    // session key -> surface
 
-    // One session per tab: strongest identity wins the claim.
-    for (const [key, s] of this.sessions) {
+    // Exact identity claims first (newest session wins a contested surface),
+    // then heuristics fill in from whatever is left — so a fuzzy title match
+    // can never steal a tab from a session that knows its surface UUID.
+    const byRecency = [...this.sessions.entries()].sort((a, b) => (b[1].lastActivity || 0) - (a[1].lastActivity || 0));
+    for (const [key, s] of byRecency) {
       let hit = null;
-      try { hit = this.resolveSurface(s, surfaces); } catch { /* skip */ }
-      if (hit && !claimed.has(hit.uuid)) {
-        claimed.add(hit.uuid);
-        assign.set(key, hit);
-      }
+      try { hit = this.resolveExact(s, term); } catch { /* skip */ }
+      if (hit && !claimed.has(hit.uuid)) { claimed.add(hit.uuid); assign.set(key, hit); }
+    }
+    for (const [key, s] of byRecency) {
+      if (assign.has(key)) continue;
+      let hit = null;
+      try { hit = matchSurfaceByTitle(term.filter((x) => !claimed.has(x.uuid)), s); } catch { /* skip */ }
+      if (hit) { claimed.add(hit.uuid); assign.set(key, hit); }
     }
 
     let changed = false;
@@ -317,9 +356,10 @@ class Collector {
       const tab = hit ? hit.title : null;
       const ws = hit ? hit.workspaceTitle : null;
       const siblings = hit ? hit.paneTabs : 0;
-      if (s.tabTitle !== tab || s.workspaceTitle !== ws || s.paneTabs !== siblings) {
+      const uuid = hit ? hit.uuid : null;
+      if (s.tabTitle !== tab || s.workspaceTitle !== ws || s.paneTabs !== siblings || s.surfaceUuid !== uuid) {
         this.sessions.set(key, {
-          ...s, tabTitle: tab, workspaceTitle: ws, paneTabs: siblings, cmux: !!hit,
+          ...s, tabTitle: tab, workspaceTitle: ws, paneTabs: siblings, cmux: !!hit, surfaceUuid: uuid,
         });
         changed = true;
       }
@@ -356,12 +396,81 @@ class Collector {
     }
     const liveKeys = new Set([...newest.values()].map((v) => v.key));
 
+    // Bind processes to sessions where the evidence is exact, giving the
+    // session that process's tab shim:
+    //  1. a --resume arg that is unique across processes (two processes can
+    //     claim the same id after a hibernation restore — only trust singles);
+    //  2. transcript birth time within 3 min of process start;
+    //  3. sole agent of its kind in a cwd -> the newest session there.
+    const shimFor = new Map(); // session key -> shim
+    const resumeCounts = new Map();
+    for (const a of agents) if (a.resume) resumeCounts.set(a.resume, (resumeCounts.get(a.resume) || 0) + 1);
+    const procsPerCwd = new Map();
+    for (const a of agents) {
+      if (a.cwd) procsPerCwd.set(`${a.kind} ${a.cwd}`, (procsPerCwd.get(`${a.kind} ${a.cwd}`) || 0) + 1);
+    }
+    for (const a of agents) {
+      if (!a.shim) continue;
+      if (a.resume && resumeCounts.get(a.resume) === 1 && this.sessions.has(`claude:${a.resume}`)) {
+        shimFor.set(`claude:${a.resume}`, a.shim);
+        continue;
+      }
+      if (a.kind === 'claude' && a.startedAt) {
+        const cands = [...this.sessions.entries()].filter(([, s]) =>
+          s.source === 'claude' && s.birth && Math.abs(s.birth - a.startedAt) < 180000);
+        if (cands.length === 1) { shimFor.set(cands[0][0], a.shim); continue; }
+      }
+      if (a.cwd && procsPerCwd.get(`${a.kind} ${a.cwd}`) === 1) {
+        const n = newest.get(`${a.kind} ${a.cwd}`);
+        if (n) shimFor.set(n.key, a.shim);
+      }
+    }
+
     let changed = false;
     for (const [key, s] of this.sessions) {
       const live = liveKeys.has(key);
-      if (s.live !== live || s.agentBusy) {
-        this.sessions.set(key, { ...s, live, agentBusy: false });
+      const procShim = shimFor.get(key) || null;
+      if (s.live !== live || s.agentBusy || s.procShim !== procShim) {
+        this.sessions.set(key, { ...s, live, procShim, agentBusy: false });
         changed = true;
+      }
+    }
+    if (changed) this.emit();
+  }
+
+  // The screen is the only source that says "generating right now" for every
+  // agent kind: the working status bar contains "esc to interrupt" (Claude
+  // Code and Copilot CLI both), and only while a turn is running. Check just
+  // the last few lines so conversation text can't false-positive.
+  async pollScreens() {
+    const surfaces = this.surfaces || [];
+    if (!surfaces.length) return;
+    const want = new Map(); // surface uuid -> session keys
+    for (const [key, s] of this.sessions) {
+      const uuid = s.surfaceUuid || s.focus?.cmuxShim || s.procShim;
+      if (!uuid) continue;
+      if (!surfaces.some((x) => x.uuid === uuid)) continue;
+      if (!s.live && !s.hookDriven) continue;
+      if (!want.has(uuid)) want.set(uuid, []);
+      want.get(uuid).push(key);
+    }
+    const working = new Map();
+    for (const uuid of [...want.keys()].slice(0, 12)) {
+      const out = await run(CMUX_BIN, ['read-screen', '--surface', uuid, '--lines', '30']);
+      if (out === null) continue; // read failed: unknown, not "idle"
+      const lines = String(out).split('\n').map((l) => l.trimEnd()).filter((l) => l.trim());
+      working.set(uuid, /esc (to )?interrupt/i.test(lines.slice(-4).join('\n')));
+    }
+    let changed = false;
+    for (const [uuid, keys] of want) {
+      if (!working.has(uuid)) continue;
+      const val = working.get(uuid);
+      for (const key of keys) {
+        const s = this.sessions.get(key);
+        if (s && s.screenWorking !== val) {
+          this.sessions.set(key, { ...s, screenWorking: val });
+          changed = true;
+        }
       }
     }
     if (changed) this.emit();
@@ -443,6 +552,7 @@ class Collector {
     this.pollCopilot();
     await this.pollAgents().catch(() => {});
     await this.refreshCmux().catch(() => {});
+    await this.pollScreens().catch(() => {});
     await this.pollPorts().catch(() => {});
     this.emit();
     return this.sessions.size;
@@ -569,8 +679,13 @@ class Collector {
         const fields = {
           source: 'claude',
           sessionId,
+          birth: st.birthtimeMs,
           lastActivity: Math.max(st.mtimeMs, existing?.lastActivity || 0),
         };
+        if (!existing?.focus && this.persistedFocus[sessionId]) {
+          const { ts, ...f } = this.persistedFocus[sessionId];
+          fields.focus = f;
+        }
         if (info.cwd) fields.cwd = info.cwd;
         if (info.branch) fields.branch = info.branch;
         if (info.summary) fields.summary = info.summary;
@@ -660,7 +775,8 @@ function agentProcesses() {
           : /(^|\/)copilot(\s|$)/.test(args) ? 'copilot'
           : null;
         if (!kind) continue;
-        procs.push({ pid, tty, kind, cpuSec: parseCpuTime(cputime) });
+        const resume = (args.match(/--resume[= ]([0-9a-f-]{36})/) || [])[1] || null;
+        procs.push({ pid, tty, kind, resume, cpuSec: parseCpuTime(cputime) });
       }
       if (!procs.length) return resolve([]);
       execFile('lsof', ['-a', '-d', 'cwd', '-p', procs.map((p) => p.pid).join(','), '-Fn'],
@@ -675,7 +791,37 @@ function agentProcesses() {
             p.cwd = cwds.get(p.pid) || null;
             p.children = childCount.get(p.pid) || 0;
           }
-          resolve(procs);
+          // cmux launches every tab's shell with a per-tab shim dir on PATH,
+          // so each agent process's environment names its exact surface.
+          execFile('ps', ['-wwE', '-p', procs.map((x) => x.pid).join(','), '-o', 'pid=,command='],
+            { timeout: 5000, maxBuffer: 16 * 1024 * 1024 }, (e3, out3) => {
+              const shims = new Map();
+              for (const line of String(out3 || '').split('\n')) {
+                const pm = line.match(/^\s*(\d+)\s/);
+                const sm = line.match(/cmux-cli-shims\/([0-9A-Fa-f-]{36})/);
+                if (pm && sm) shims.set(pm[1], sm[1]);
+              }
+              execFile('ps', ['-p', procs.map((x) => x.pid).join(','), '-o', 'pid=,etime='],
+                { timeout: 5000 }, (e4, out4) => {
+                  const started = new Map();
+                  for (const line of String(out4 || '').split('\n')) {
+                    const m2 = line.match(/^\s*(\d+)\s+(\S+)/);
+                    if (!m2) continue;
+                    // etime: [[dd-]hh:]mm:ss
+                    const t = m2[2]; let sec = 0;
+                    const dd = t.match(/^(\d+)-(.*)$/);
+                    const rest = dd ? dd[2] : t;
+                    for (const v of rest.split(':')) sec = sec * 60 + parseFloat(v);
+                    if (dd) sec += parseInt(dd[1], 10) * 86400;
+                    started.set(m2[1], Date.now() - sec * 1000);
+                  }
+                  for (const p of procs) {
+                    p.shim = shims.get(p.pid) || null;
+                    p.startedAt = started.get(p.pid) || null;
+                  }
+                  resolve(procs);
+                });
+            });
         });
     });
   });
