@@ -89,6 +89,16 @@
   #term::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
   #term::-webkit-scrollbar-corner { background: transparent; }
   #term.faded { opacity: 0; }
+  /* Solid block while this pane owns the keyboard, hollow when it does not —
+     the same tell every terminal gives you about where your typing will land. */
+  /* `span.cur`, not `.cur`: the generated palette rules below are `#term .sN`,
+     and the cursor has to outrank whatever colour its own cell was painted. */
+  #term span.cur { background: rgba(232,234,242,0.85); color: #0b0b10; }
+  #pane:not(.focused) #term span.cur {
+    background: transparent;
+    color: inherit;
+    box-shadow: inset 0 0 0 1px rgba(232,234,242,0.45);
+  }
   #msg {
     position: absolute;
     inset: 0;
@@ -117,6 +127,10 @@
   footer .hint { color: #6f7488; }
   footer .hint.live { color: #6bb694; }
 </style>
+<!-- Filled on every paint with one rule per style in cmux's render grid. It
+     lives after the block above so the session's own colours win, and outside
+     it so a repaint never has to touch the shell's stylesheet. -->
+<style id="sgr"></style>
 </head>
 <body>
 <div id="app">

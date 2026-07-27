@@ -1,5 +1,6 @@
-// Live terminal mirror: paints the session's current screen text and routes
-// keystrokes back to the real terminal through the main process.
+// Live terminal mirror: paints the session's current screen — colours, cursor
+// and all — and routes keystrokes back to the real terminal through the main
+// process.
 
 const params = new URLSearchParams(location.search);
 const uuid = params.get('uuid') || '';
@@ -8,7 +9,7 @@ const initialTitle = params.get('title') || 'session';
 // Degrade to a no-op bridge if the page is ever opened without the preload,
 // so a missing IPC channel can't take the whole window down.
 const bridge = window.mirror || {
-  onState() {}, sendText() {}, sendKey() {}, close() {},
+  onState() {}, sendText() {}, sendKey() {}, setActive() {}, close() {},
 };
 
 const titleEl = document.getElementById('title');
@@ -18,6 +19,7 @@ const msg = document.getElementById('msg');
 const closeBtn = document.getElementById('close');
 const focusHint = document.getElementById('focus-hint');
 const headerEl = document.querySelector('header');
+const sgrEl = document.getElementById('sgr');
 
 function setTitle(t) {
   const name = String(t || '').trim() || 'session';
@@ -32,35 +34,99 @@ setTitle(initialTitle);
 // How close to the tail counts as "following along".
 const STICK_PX = 40;
 let firstPaint = true;
-let lastText = '';
+let cols = 0;
 
 const nearBottom = () =>
   term.scrollHeight - term.scrollTop - term.clientHeight <= STICK_PX;
 
 const toBottom = () => { term.scrollTop = term.scrollHeight; };
 
-// cmux pads screen rows out to the terminal width. Those trailing spaces draw
-// nothing but they widen the grid, which would cost a font size step and hang a
-// scrollbar on empty air — so they come off. Leading and interior blank lines
-// are part of what the TUI drew and stay; only the dead rows below the last
-// line of content are dropped.
-function normalize(text) {
-  const lines = String(text).split('\n');
-  for (let i = 0; i < lines.length; i++) lines[i] = lines[i].replace(/[ \t\r]+$/, '');
-  while (lines.length && lines[lines.length - 1] === '') lines.pop();
-  return lines.join('\n');
+// cmux resolves the Ghostty theme itself, so colours arrive as plain hex. They
+// still get checked before being written into a stylesheet — the rule text is
+// the one place in this file where a string stops being inert data.
+const HEX = /^#[0-9A-Fa-f]{3,8}$/;
+const colour = (v) => (typeof v === 'string' && HEX.test(v) ? v : null);
+
+// The terminal's own background stays out of the paint: chud's shell already
+// sets one, and repainting every cell with it would just fight the card look.
+// Backgrounds that differ from it are real — a selection, a status bar, a diff
+// — and those do get drawn.
+function styleRules(styles, defaultBg) {
+  const out = [];
+  for (const id of Object.keys(styles)) {
+    if (!/^\d+$/.test(id)) continue;  // a selector is never built from free text
+    const st = styles[id];
+    const decls = [];
+    let fg = colour(st.fg);
+    let bg = colour(st.bg);
+    if (st.r) { const t = fg; fg = bg; bg = t; }   // inverse
+    if (st.h) fg = 'transparent';                  // invisible
+    if (fg) decls.push(`color:${fg}`);
+    if (bg && bg !== defaultBg) decls.push(`background:${bg}`);
+    if (st.b) decls.push('font-weight:600');
+    if (st.f) decls.push('opacity:.55');
+    if (st.i) decls.push('font-style:italic');
+    const lines = [];
+    if (st.u) lines.push('underline');
+    if (st.s) lines.push('line-through');
+    if (st.o) lines.push('overline');
+    if (lines.length) decls.push(`text-decoration:${lines.join(' ')}`);
+    // Scoped under #term so these outrank the pane's own default colour, which
+    // is set on that same id.
+    if (decls.length) out.push(`#term .s${id}{${decls.join(';')}}`);
+  }
+  return out.join('');
 }
 
-function longestLine(text) {
-  let max = 0;
-  let start = 0;
-  for (;;) {
-    const nl = text.indexOf('\n', start);
-    const len = (nl === -1 ? text.length : nl) - start;
-    if (len > max) max = len;
-    if (nl === -1) return max;
-    start = nl + 1;
+function span(text, sid, isCursor) {
+  const el = document.createElement('span');
+  el.className = isCursor ? `s${sid} cur` : `s${sid}`;
+  el.textContent = text;
+  return el;
+}
+
+// Painted with createElement + textContent throughout: screen contents are
+// whatever a command decided to print, and none of it is ever markup here.
+function paint(frame) {
+  const stick = firstPaint || nearBottom();
+
+  sgrEl.textContent = styleRules(frame.styles || {}, colour(frame.bg));
+
+  const cur = frame.cursor;
+  const doc = document.createDocumentFragment();
+  const rows = frame.rows || [];
+
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    const onCursorRow = cur && cur.row === r;
+    let col = 0;
+    for (const seg of row) {
+      const text = seg[0];
+      const sid = seg[1];
+      // The cursor is drawn by splitting whichever span contains it, so it sits
+      // in the text flow instead of floating over it on a guessed cell width.
+      if (onCursorRow && cur.col >= col && cur.col < col + text.length) {
+        const at = cur.col - col;
+        if (at > 0) doc.appendChild(span(text.slice(0, at), sid));
+        doc.appendChild(span(text.charAt(at), sid, true));
+        if (at + 1 < text.length) doc.appendChild(span(text.slice(at + 1), sid));
+      } else {
+        doc.appendChild(span(text, sid));
+      }
+      col += text.length;
+    }
+    // A cursor parked past the last printed column has no span to split.
+    if (onCursorRow && cur.col >= col) {
+      if (cur.col > col) doc.appendChild(span(' '.repeat(cur.col - col), 0));
+      doc.appendChild(span(' ', 0, true));
+    }
+    if (r < rows.length - 1) doc.appendChild(document.createTextNode('\n'));
   }
+
+  term.replaceChildren(doc);
+  fitFontSize();
+  if (stick) toBottom();
+  firstPaint = false;
 }
 
 // Advance width of the monospace stack as a fraction of the font size (~0.6),
@@ -76,7 +142,6 @@ let fontPx = 0;
 // Wrapping is off, so the only alternative to fitting the grid across the pane
 // is a horizontal scrollbar. Shrink the type until the widest row fits.
 function fitFontSize() {
-  const cols = longestLine(lastText);
   const avail = pane.clientWidth - PAD_PX * 2 - GUTTER_PX;
   if (!cols || avail <= 0) return;
   const px = Math.min(MAX_PX, Math.max(MIN_PX, Math.floor(avail / (cols * CHAR_RATIO))));
@@ -89,9 +154,9 @@ function render(s) {
   if (!s || typeof s !== 'object') return;
   if (typeof s.title === 'string' && s.title.trim()) setTitle(s.title);
 
-  // No text means the pty is gone / unreadable — keep the stale screen hidden
+  // No frame means the pty is gone / unreadable — keep the stale screen hidden
   // but still in the DOM so its scroll position survives a blip.
-  if (s.error || s.text == null) {
+  if (s.error || !s.frame) {
     msg.title = typeof s.error === 'string' ? s.error : '';
     msg.classList.remove('hidden');
     term.classList.add('faded');
@@ -100,17 +165,8 @@ function render(s) {
 
   msg.classList.add('hidden');
   term.classList.remove('faded');
-
-  const text = normalize(s.text);
-  if (!firstPaint && text === lastText) return;
-
-  // Decide before mutating: only chase the tail if the user was already there.
-  const stick = firstPaint || nearBottom();
-  lastText = text;
-  term.textContent = text;
-  fitFontSize();
-  if (stick) toBottom();
-  firstPaint = false;
+  cols = s.frame.cols || 0;
+  paint(s.frame);
 }
 
 bridge.onState(render);
@@ -121,6 +177,12 @@ window.addEventListener('resize', () => {
   const stick = nearBottom();
   fitFontSize();
   if (stick) toBottom();
+});
+
+// A mirror on another Space or behind a full-screen window is not worth reading
+// ten times a second, and Electron's blur alone does not catch that.
+document.addEventListener('visibilitychange', () => {
+  bridge.setActive(uuid, document.visibilityState === 'visible');
 });
 
 /* -------------------------------- closing -------------------------------- */
@@ -165,9 +227,26 @@ const SPECIAL = {
   ArrowDown: 'down',
   ArrowLeft: 'left',
   ArrowRight: 'right',
+  Delete: 'delete',
+  // cmux accepts home/end and neither one moves the cursor, so they are sent as
+  // the control codes that actually do.
+  Home: 'ctrl+a',
+  End: 'ctrl+e',
 };
 
-const CTRL = new Set(['c', 'u', 'd', 'r', 'l']);
+// The mac line-editing chords, mapped to what a terminal actually understands.
+// Word motion is the odd one out: alt+b / alt+f are accepted by cmux and do
+// nothing, while alt+left / alt+right work, so those are passed through as-is.
+const META = {
+  Backspace: 'ctrl+u',   // ⌘⌫ kill line
+  ArrowLeft: 'ctrl+a',   // ⌘← start of line
+  ArrowRight: 'ctrl+e',  // ⌘→ end of line
+};
+const ALT = {
+  Backspace: 'ctrl+w',   // ⌥⌫ delete word back
+  ArrowLeft: 'alt+left',
+  ArrowRight: 'alt+right',
+};
 
 const termFocused = () =>
   document.activeElement === term || term.contains(document.activeElement);
@@ -184,18 +263,34 @@ document.addEventListener('keydown', (e) => {
 term.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') return; // handled above
 
+  // Page keys scroll the mirror. They are deliberately not forwarded: cmux
+  // accepts pageup/pagedown and types a literal `~` into the prompt.
+  if (!e.metaKey && !e.altKey && !e.ctrlKey && (e.key === 'PageUp' || e.key === 'PageDown')) {
+    e.preventDefault();
+    term.scrollTop += (e.key === 'PageUp' ? -1 : 1) * term.clientHeight * 0.9;
+    return;
+  }
+
+  if (e.metaKey && !e.ctrlKey) {
+    const mapped = META[e.key];
+    if (mapped) { e.preventDefault(); sendKey(mapped); return; }
+    return; // ⌘C / ⌘V / ⌘A stay with the OS
+  }
+
+  if (e.altKey && !e.ctrlKey && !e.metaKey) {
+    const mapped = ALT[e.key];
+    if (mapped) { e.preventDefault(); sendKey(mapped); return; }
+    return;
+  }
+
   if (e.ctrlKey && !e.metaKey && !e.altKey) {
-    const c = e.key.toLowerCase();
-    if (CTRL.has(c)) {
+    const c = e.key.length === 1 ? e.key.toLowerCase() : '';
+    if (c >= 'a' && c <= 'z') {
       e.preventDefault();
       sendKey(`ctrl+${c}`);
     }
     return;
   }
-
-  // Leave Cmd/Alt combos alone so Cmd+V still raises a paste event and
-  // Cmd+C still copies the selection.
-  if (e.metaKey || e.altKey) return;
 
   const special = SPECIAL[e.key];
   if (special) {

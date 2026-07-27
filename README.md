@@ -14,8 +14,9 @@ who's working, who's waiting on you, and where.
 - **`LIVE` badge** when the agent process is still open
 - **localhost port chips** for dev servers the session owns — click to open
 - Last prompt, last reply, branch, and time since last prompt/finish
-- **Click a card** to open a themed live mirror of that terminal (toggle in
-  ⚙ settings; when off, a click jumps to the cmux tab instead)
+- **Click a card** to open a live mirror of that terminal — full colour, cursor,
+  and mac line-editing chords (⌘⌫, ⌥⌫, ⌘←/→, ⌥←/→), typed straight back into the
+  real session (toggle in ⚙ settings; when off, a click jumps to the cmux tab)
 
 Active + recent sessions show by default; older ones collapse behind a toggle.
 
