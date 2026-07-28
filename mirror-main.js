@@ -348,7 +348,7 @@ function buildFrame(res) {
 
 /* -------------------------------- lifecycle ------------------------------- */
 
-function openMirror({ uuid, workspaceUuid, title } = {}) {
+function openMirror({ uuid, workspaceUuid, title, opacity } = {}) {
   if (!isSurfaceUuid(uuid)) return null;
 
   const existing = mirrors.get(uuid);
@@ -418,6 +418,9 @@ function openMirror({ uuid, workspaceUuid, title } = {}) {
   win.on('hide', wake(false));
   win.on('minimize', wake(false));
 
+  if (typeof opacity === 'number') win.setOpacity(Math.min(1, Math.max(0.2, opacity)));
+  // Click anywhere outside the mirror closes it (blur = focus left the window).
+  win.on('blur', () => { if (!win.isDestroyed()) win.close(); });
   win.on('closed', () => {
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = null;
@@ -555,4 +558,11 @@ function registerIpc() {
 
 registerIpc();
 
-module.exports = { openMirror };
+function setMirrorOpacity(v) {
+  const op = Math.min(1, Math.max(0.2, Number(v) || 1));
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed() && w.webContents.getURL().includes('mirror.html')) w.setOpacity(op);
+  }
+}
+
+module.exports = { openMirror, setMirrorOpacity };

@@ -138,6 +138,8 @@ function applySettingsUI(s) {
   $('follow').checked = !!s.followDisplay;
   $('mirror-click').checked = s.mirrorOnClick !== false;
   $('done-sound').checked = !!s.doneSound;
+  $('mirror-op').value = s.mirrorOpacity ?? 1;
+  $('mirror-op-v').textContent = Math.round((s.mirrorOpacity ?? 1) * 100) + '%';
   $('done-vol').value = s.doneSoundVolume ?? 1;
   $('done-vol-v').textContent = Math.round((s.doneSoundVolume ?? 1) * 100) + '%';
   $('done-sound-dir').value = s.doneSoundDir || '';
@@ -177,6 +179,11 @@ $('follow').addEventListener('change', (e) => {
 });
 $('mirror-click').addEventListener('change', (e) => {
   window.hud.setSettings({ mirrorOnClick: e.target.checked });
+});
+$('mirror-op').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  $('mirror-op-v').textContent = Math.round(v * 100) + '%';
+  window.hud.setSettings({ mirrorOpacity: v }); // applies live to open mirrors
 });
 $('done-sound').addEventListener('change', (e) => {
   window.hud.setSettings({ doneSound: e.target.checked });

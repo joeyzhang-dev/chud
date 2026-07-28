@@ -7,7 +7,7 @@ const { Collector } = require('./collector');
 let win;
 let collector;
 
-const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', toggleHotkey: 'Control+Shift+H', followDisplay: true, doneSound: true, doneSoundDir: '/Users/joey/Downloads/claude sfx', doneSoundVolume: 1, mirrorOnClick: true };
+const DEFAULT_SETTINGS = { focusedOpacity: 1, unfocusedOpacity: 0.85, compact: false, hotkey: 'Control+Shift+Space', toggleHotkey: 'Control+Shift+H', followDisplay: true, doneSound: true, doneSoundDir: '/Users/joey/Downloads/claude sfx', doneSoundVolume: 1, mirrorOnClick: true, mirrorOpacity: 1 };
 
 // Random sound from the configured folder when any session finishes a turn.
 // Lives here (not in per-agent hooks) so Copilot sessions get it too.
@@ -132,6 +132,7 @@ function saveSettings() {
 }
 
 function applySettings() {
+  try { require('./mirror-main').setMirrorOpacity(settings.mirrorOpacity ?? 1); } catch { /* module absent */ }
   if (!win || win.isDestroyed()) return;
   win.setOpacity(win.isFocused() ? settings.focusedOpacity : settings.unfocusedOpacity);
   win.webContents.send('settings', settings);
@@ -234,7 +235,7 @@ app.whenReady().then(() => {
     if (!surf) return collector.focusSession(key);
     try {
       const { openMirror } = require('./mirror-main');
-      openMirror({ uuid: surf.uuid, workspaceUuid: surf.workspaceUuid, title: surf.title });
+      openMirror({ uuid: surf.uuid, workspaceUuid: surf.workspaceUuid, title: surf.title, opacity: settings.mirrorOpacity ?? 1 });
       return 'mirror opened';
     } catch (e) {
       return collector.focusSession(key);
