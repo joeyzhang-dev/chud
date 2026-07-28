@@ -409,7 +409,11 @@ function endSwipe() {
   reveal.classList.remove('armed');
   swipe = null;
   setTimeout(() => { swipeHold = false; render(); }, 300);
-  if (armed && lastSettings.mirrorOnClick !== false) window.hud.openMirror(key);
+  // Defer the open past the spring-back's first frames: BrowserWindow
+  // creation briefly blocks the main process, which froze the animation.
+  if (armed && lastSettings.mirrorOnClick !== false) {
+    setTimeout(() => window.hud.openMirror(key), 40);
+  }
 }
 
 document.getElementById('list').addEventListener('wheel', (e) => {
@@ -423,6 +427,9 @@ document.getElementById('list').addEventListener('wheel', (e) => {
     swipeHold = true;
     swipe = { wrap, card, reveal: wrap.querySelector('.reveal'), key: card.dataset.key, x: 0, timer: null, armed: false };
   }
+  // Inertia tail: tiny deltas after the fingers lift kept resetting the
+  // quiet timer, adding lag before commit. Ignore them.
+  if (swipe.x > 0 && Math.abs(e.deltaX) < 4) return;
   swipe.x = Math.max(0, Math.min(SWIPE_MAX, swipe.x - e.deltaX));
   card.style.transition = 'none';
   card.style.transform = `translateX(${swipe.x}px)`;
@@ -433,8 +440,10 @@ document.getElementById('list').addEventListener('wheel', (e) => {
     swipe.armed = armed;
     swipe.reveal.classList.toggle('armed', armed); // threshold pop
   }
+  // Full swipe commits instantly, iOS-style; otherwise commit on quiet.
+  if (swipe.x >= SWIPE_MAX) { clearTimeout(swipe.timer); endSwipe(); return; }
   clearTimeout(swipe.timer);
-  swipe.timer = setTimeout(endSwipe, 140); // trackpads emit no "gesture end"
+  swipe.timer = setTimeout(endSwipe, 90); // trackpads emit no "gesture end"
 }, { passive: true });
 
 setInterval(render, 15000);
