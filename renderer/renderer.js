@@ -343,6 +343,12 @@ window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
   if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSel(1); }
   else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSel(-1); }
+  else if (e.key === 'ArrowRight' && sel >= 0) {
+    // keyboard nav: right arrow mirrors the selected session
+    e.preventDefault();
+    const card = document.querySelectorAll('.card')[sel];
+    if (card?.dataset.key && lastSettings.mirrorOnClick !== false) window.hud.openMirror(card.dataset.key);
+  }
   else if (e.key === 'Enter' && sel >= 0) {
     e.preventDefault();
     const card = document.querySelectorAll('.card')[sel];
