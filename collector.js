@@ -583,17 +583,23 @@ class Collector {
     for (const l of listeners) {
       if (!l.cwd) continue;
       // Longest matching session cwd wins, so a nested repo beats its parent.
-      let best = null;
-      for (const [key, s] of this.sessions) {
+      let bestCwd = null;
+      for (const [, s] of this.sessions) {
         if (!s.cwd) continue;
         if (l.cwd === s.cwd || l.cwd.startsWith(s.cwd + '/')) {
-          if (!best || s.cwd.length > best.cwd.length) best = { key, cwd: s.cwd };
+          if (!bestCwd || s.cwd.length > bestCwd.length) bestCwd = s.cwd;
         }
       }
-      if (!best) continue;
-      const arr = byKey.get(best.key) || [];
-      if (!arr.some((p) => p.port === l.port)) arr.push({ port: l.port, cmd: l.cmd });
-      byKey.set(best.key, arr);
+      if (!bestCwd) continue;
+      // Every session of the owning project gets the chip — pinning it to a
+      // single session left the visible card portless when several sessions
+      // share a cwd.
+      for (const [key, s] of this.sessions) {
+        if (s.cwd !== bestCwd) continue;
+        const arr = byKey.get(key) || [];
+        if (!arr.some((p) => p.port === l.port)) arr.push({ port: l.port, cmd: l.cmd });
+        byKey.set(key, arr);
+      }
     }
 
     let changed = false;
